@@ -3,8 +3,8 @@
 One knob, one purpose: halve what a long frame batch costs in RAM before it
 reaches a node that sizes its own output buffer from the input dtype.
 
-The case this was written for. `Luna-RTXVideoFinisher`
-takes `out_dtype = images.dtype` and preallocates `[batch, h, w, 3]` in it, so a
+The case this was written for. `Luna-RTXUpscaler` and `Luna-RTXFrameGen`
+take `out_dtype = images.dtype` and preallocate `[batch, h, w, 3]` in it, so a
 2688x1536 frame costs 49.5 MB in fp32 and 24.7 MB in fp16 — over a 247-frame
 interpolated clip that is 12.2 GB against 6.1 GB. GIMM-VFI cannot supply the
 fp16: `interpolate()` ends with `.cpu().float()`, which discards whatever its own

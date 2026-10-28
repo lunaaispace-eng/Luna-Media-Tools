@@ -3,6 +3,6 @@
 Pillow
 psutil
 numpy
-# Optional, only when Luna-RTXUpscale / Luna-RTXVideoFinisher RUN (imported lazily, the pack
-# loads without it): NVIDIA RTX VFX, the `nvvfx` Python module. Install it as the node's
-# help (the (i) button) describes.
+# Optional, only when Luna-RTXUpscaler / Luna-RTXFrameGen RUN (imported lazily, the pack
+# loads without it): NVIDIA RTX VFX, the `nvvfx` Python module. Install it with ComfyUI's Python:
+# python -m pip install nvidia-vfx  (0.2.0.0 or newer), then restart ComfyUI.

@@ -14,7 +14,7 @@ PACK = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 COMFY = os.environ.get("COMFYUI_DIR", r"E:\ComfyUI-Easy-Install\ComfyUI")
 
 IDS = ["Luna-SaveImage", "Luna-SaveVideo", "Luna-LoadVideo", "Luna-ImagePrecision", "Luna-Degrid",
-       "Luna-Ideogram", "Luna-Watermark", "Luna-StatusSwitch", "Luna-RTXUpscale", "Luna-RTXVideoFinisher"]
+       "Luna-Ideogram", "Luna-Watermark", "Luna-StatusSwitch", "Luna-RTXUpscaler", "Luna-RTXFrameGen"]
 
 
 def load_pack():
@@ -61,7 +61,7 @@ class RegistrationTests(unittest.TestCase):
         web = os.path.join(PACK, "web")
         wanted = {"save_video_simple_preview.js": "Luna-SaveVideo", "luna_load_video.js": "Luna-LoadVideo",
                   "luna_node_status_switch.js": "Luna-StatusSwitch", "ideogram4_prompt_builder.js": "Luna-Ideogram",
-                  "luna_rtx_upscale.js": "Luna-RTXUpscale", "luna_rtx_video_finisher.js": "Luna-RTXVideoFinisher"}
+                  "luna_rtx_ui.js": "Luna-RTXUpscaler"}
         for name, node_id in wanted.items():
             with open(os.path.join(web, name), encoding="utf8") as f:
                 self.assertIn(f'"{node_id}"', f.read(), name)
@@ -77,8 +77,8 @@ class RegistrationTests(unittest.TestCase):
         help_part = code[code.index("registerLunaHelp(app"):code.index("registerLunaCollapse(app")]
         collapse_part = code[code.index("registerLunaCollapse(app"):]
         self.assertEqual(set(re.findall(r'"(Luna-[A-Za-z]+)"', help_part)), set(IDS))
-        for node_id in ("Luna-Ideogram", "Luna-Watermark", "Luna-StatusSwitch", "Luna-RTXUpscale",
-                        "Luna-RTXVideoFinisher"):
+        for node_id in ("Luna-Ideogram", "Luna-Watermark", "Luna-StatusSwitch", "Luna-RTXUpscaler",
+                        "Luna-RTXFrameGen"):
             self.assertIn(f'"{node_id}"', collapse_part)
 
     def test_every_node_has_a_description(self):

@@ -2,7 +2,7 @@
 
 Ten nodes, node id = display name, category "Luna-Media-Tools":
   Luna-SaveImage, Luna-SaveVideo, Luna-LoadVideo, Luna-ImagePrecision, Luna-Degrid,
-  Luna-Ideogram, Luna-Watermark, Luna-StatusSwitch, Luna-RTXUpscale, Luna-RTXVideoFinisher.
+  Luna-Ideogram, Luna-Watermark, Luna-StatusSwitch, Luna-RTXUpscaler, Luna-RTXFrameGen.
 
 All V1 mappings (Luna-Ideogram is a V3 class registered through the V1 mapping, as the
 standalone pack did). The frontend lives in one folder, web/.

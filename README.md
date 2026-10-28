@@ -2,7 +2,7 @@
 
 General image and video tools for ComfyUI, ten nodes in one pack: save an image, save a video on the
 GPU, load a video with its sound, cast a batch to fp16, remove the VAE pixel grid, draw an Ideogram 4
-prompt on a canvas, overlay a watermark, switch other nodes on and off, and upscale with NVIDIA RTX VFX.
+prompt on a canvas, overlay a watermark, switch other nodes on and off, upscale with NVIDIA RTX VFX, and add in-between frames with RTX frame generation.
 
 Every node's id is its display name, and every node sits in the category `Luna-Media-Tools`.
 Each node has an (i) help button on its title bar, and the big ones a chevron that folds the settings away.
@@ -18,9 +18,14 @@ git clone https://github.com/lunaaispace-eng/Luna-Media-Tools
 
 Dependencies are in `requirements.txt` (Pillow, numpy, psutil; everything else comes with ComfyUI). The two RTX
 nodes also need NVIDIA RTX VFX (`nvvfx`, the `nvidia-vfx` package, 0.2.0.0 or newer) when they run; the pack
-loads without it. They use the `nvvfx` that is already installed in ComfyUI's Python (the same one the
-ComfyUI Nvidia VFX nodes use). If it is missing, the node's help (the (i) button) and its error message give
-the install steps for this pack, and the node's "Copy install steps" button copies them.
+loads without it. Install it into the Python that runs ComfyUI, then restart ComfyUI:
+
+```
+python_embeded\python.exe -m pip install nvidia-vfx
+```
+
+(`python -m pip install nvidia-vfx` for a venv install). They need an NVIDIA RTX GPU and a current driver. If
+`nvvfx` is missing, the node's error message gives the same steps.
 
 ## Node tree
 
@@ -32,8 +37,8 @@ the install steps for this pack, and the node's "Copy install steps" button copi
 - **Luna-Ideogram**: Draw regions on a canvas; builds the Ideogram 4 JSON prompt.
 - **Luna-Watermark**: Overlays a watermark on images or video frames.
 - **Luna-StatusSwitch**: Mutes or bypasses connected nodes from one on/off switch.
-- **Luna-RTXUpscale**: Upscales images with NVIDIA RTX VFX.
-- **Luna-RTXVideoFinisher**: RTX denoise/deblur, then RTX upscale, frame by frame.
+- **Luna-RTXUpscaler**: RTX denoise, deblur and upscale, each with its own strength.
+- **Luna-RTXFrameGen**: Adds in-between frames with NVIDIA RTX frame generation.
 
 ## Replaces
 
