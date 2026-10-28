@@ -1,5 +1,10 @@
 /**
- * Luna-StatusSwitch - ComfyUI frontend extension (derived from ComfyUI-DaSiWa-Nodes, Apache-2.0)
+ * Luna-StatusSwitch - ComfyUI frontend extension
+ *
+ * Derived from js/node_status_switch.js in ComfyUI-DaSiWa-Nodes
+ * (https://github.com/darksidewalker/ComfyUI-DaSiWa-Nodes), commit ab364c5, GPL-3.0
+ * (see THIRD_PARTY_NOTICES.md). Changes: node id, console prefix, debug flag and
+ * internal flag names renamed to Luna-StatusSwitch.
  *
  * Minimal JS responsibilities:
  *   1. Manage dynamic target_XX inputs (grow on connect, up to 20)
@@ -23,12 +28,13 @@ const MODE_ACTIVE   = 0;
 const MODE_MUTE     = 2;
 const MODE_BYPASS   = 4;
 const NODE_TYPE     = "Luna-StatusSwitch";
+const DIRECTOR_TYPE = "MiniMaxH3Director";
 const TARGET_PREFIX = "target_";
 const MAX_TARGETS   = 99;
 
-// Toggle in browser console:  window.DASIWA_SWITCH_DEBUG = true
+// Toggle in browser console:  window.LUNA_STATUSSWITCH_DEBUG = true
 function dlog(...args) {
-    if (typeof window !== "undefined" && window.DASIWA_SWITCH_DEBUG) {
+    if (typeof window !== "undefined" && window.LUNA_STATUSSWITCH_DEBUG) {
         console.log("[Luna-StatusSwitch]", ...args);
     }
 }
@@ -202,6 +208,36 @@ function resolveSourceNode(startNode, graph) {
     return current;
 }
 
+// Modes that make the Director's fl2va_requested output true — mirrors
+// `mode in BASE_MODES or mode == "Image Inpaint"` in
+// nodes/nodes_minimax_h3_director.py.
+const FL2VA_FAMILY_MODES = ["T2VA", "I2VA", "FL2VA", "L2VA", "Image Inpaint"];
+
+/**
+ * Read the computed "request" boolean outputs of the MiniMax H3 Director.
+ *
+ * The Director's fl2va_requested / inpaint_requested outputs are computed
+ * in the backend from the mode combo (build_guide); the frontend node never
+ * stores them. A switch wired to one of these outputs therefore derives the
+ * value from the Director's mode widget instead.
+ *
+ * Returns a boolean, or null if the slot is not a known request output.
+ */
+function readDirectorRequest(director, slotIndex) {
+    if (!director) return null;
+    const name = director.outputs?.[slotIndex]?.name;
+    const mode = getWidget(director, "mode")?.value;
+    if (mode == null) return null;
+    switch (name) {
+        case "inpaint_requested":
+            return mode === "Image Inpaint";
+        case "fl2va_requested":
+            return FL2VA_FAMILY_MODES.includes(mode);
+        default:
+            return null;
+    }
+}
+
 /**
  * Read the effective "enabled" value at queue time.
  * If the "enabled" input is connected, follow the link to the source
@@ -238,10 +274,17 @@ function readEnabled(switchNode, visited) {
                 if (src.type === NODE_TYPE) {
                     const v = readEnabled(src, visited);
                     if (v != null) return v;
-                } else {
-                    const v = readBoolFromNode(src);
+                }
+                // The MiniMax H3 Director's request outputs (inpaint_requested,
+                // fl2va_requested) are computed in the backend from its mode
+                // combo; derive them from the mode widget so the switch follows
+                // the mode pill live.
+                if (src.type === DIRECTOR_TYPE) {
+                    const v = readDirectorRequest(src, link.origin_slot);
                     if (v != null) return v;
                 }
+                const v = readBoolFromNode(src);
+                if (v != null) return v;
             }
         }
     }
@@ -351,7 +394,7 @@ function sanitizeQueuePrompt(queuePromptData) {
 }
 
 function patchQueuePrompt() {
-    if (api.__dasiwaNodeStatusSwitchQueuePatched) return;
+    if (api.__lunaStatusSwitchQueuePatched) return;
 
     const originalQueuePrompt = api.queuePrompt;
     api.queuePrompt = async function (index, prompt, ...args) {
@@ -359,7 +402,7 @@ function patchQueuePrompt() {
         return originalQueuePrompt.apply(this, [index, prompt, ...args]);
     };
 
-    api.__dasiwaNodeStatusSwitchQueuePatched = true;
+    api.__lunaStatusSwitchQueuePatched = true;
 }
 
 function applyAllSwitches() {
@@ -371,7 +414,7 @@ function applyAllSwitches() {
 }
 
 function patchGraphToPrompt() {
-    if (app.__dasiwaNodeStatusSwitchGraphToPromptPatched) return;
+    if (app.__lunaStatusSwitchGraphToPromptPatched) return;
 
     const originalGraphToPrompt = app.graphToPrompt;
     app.graphToPrompt = async function (...args) {
@@ -381,7 +424,7 @@ function patchGraphToPrompt() {
         return prompt;
     };
 
-    app.__dasiwaNodeStatusSwitchGraphToPromptPatched = true;
+    app.__lunaStatusSwitchGraphToPromptPatched = true;
 }
 
 patchQueuePrompt();

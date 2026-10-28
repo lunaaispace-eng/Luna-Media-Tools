@@ -18,13 +18,25 @@ import { registerLunaCollapse } from "./luna_collapse.mjs";
 //     "Luna-LoadVideo": "input",
 //     "Luna-SaveImage": "output",
 //     "Luna-SaveVideo": "output",
+//     "Luna-Ideogram": "processing",
+//     "Luna-Watermark": "processing",
+//     "Luna-StatusSwitch": "processing",
+//     "Luna-RTXUpscale": "processing",
+//     "Luna-RTXVideoFinisher": "processing",
 // }, "LunaMediaTools.Theme");
 
 // The ⓘ on the title bar. Content is each node's Python DESCRIPTION plus its
 // input tooltips, so there is no separate help file to keep up to date.
-registerLunaHelp(app, ["Luna-LoadVideo", "Luna-SaveImage", "Luna-SaveVideo", "Luna-ImagePrecision", "Luna-Degrid"], "LunaMediaTools.Help");
+registerLunaHelp(app, [
+    "Luna-LoadVideo", "Luna-SaveImage", "Luna-SaveVideo", "Luna-ImagePrecision", "Luna-Degrid",
+    "Luna-Ideogram", "Luna-Watermark", "Luna-StatusSwitch", "Luna-RTXUpscale", "Luna-RTXVideoFinisher",
+], "LunaMediaTools.Help");
 
 // The chevron beside it folds the settings away, leaving sockets and whatever the
 // node draws for itself — Luna-SaveImage keeps its preview, Luna-SaveVideo keeps the
-// player, the frame checkboxes, Autoplay and Download.
-registerLunaCollapse(app, ["Luna-SaveImage", "Luna-SaveVideo", "Luna-LoadVideo"], "LunaMediaTools.Collapse");
+// player, the frame checkboxes, Autoplay and Download. Luna-Ideogram keeps its canvas editor,
+// Luna-RTXUpscale and Luna-RTXVideoFinisher keep their control panels (all DOM widgets).
+registerLunaCollapse(app, [
+    "Luna-SaveImage", "Luna-SaveVideo", "Luna-LoadVideo",
+    "Luna-Ideogram", "Luna-Watermark", "Luna-StatusSwitch", "Luna-RTXUpscale", "Luna-RTXVideoFinisher",
+], "LunaMediaTools.Collapse");

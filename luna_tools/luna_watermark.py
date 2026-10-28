@@ -1,3 +1,6 @@
+# Derived from ComfyUI-DaSiWa-Nodes (https://github.com/darksidewalker/ComfyUI-DaSiWa-Nodes),
+# commit ab364c5, GPL-3.0 (see THIRD_PARTY_NOTICES.md). Source file: nodes/nodes_watermark.py
+# Changes: renamed to Luna-Watermark (category Luna-Media-Tools); helper imports point at luna_batch_output / luna_logging; DESCRIPTION rewritten; input 'description' keys became 'tooltip' (ComfyUI shows tooltips, not description); registered as a V1 node.
 import os
 import torch
 import torch.nn.functional as F
@@ -6,7 +9,9 @@ from PIL import Image
 from typing import Tuple
 import folder_paths
 import comfy.utils
-from .luna_helpers import allocate_cpu_output, log_luna
+import gc
+from .luna_batch_output import allocate_cpu_output, force_gc_and_cleanup
+from .luna_logging import log_luna
 
 # --- Helpers ---
 
@@ -95,10 +100,13 @@ def _sanitize_premultiplied_rgba(x: torch.Tensor) -> torch.Tensor:
 
 class LunaWatermark:
     DESCRIPTION = (
-        "Luna-Watermark: A professional-grade watermark overlay node with stable CPU compositing.\n"
-        "Stores output batches in RAM and blends from initialized source frames to avoid flicker,\n"
-        "Bicubic/Lanczos scaling, rotation, and 'Optical Padding' for perfect visual alignment."
+        "Luna-Watermark: lays a watermark image (PNG with transparency works best) over an image or every "
+        "frame of a video batch.\n\n"
+        "Choose the corner, size, opacity and rotation. Optionally fade it in and out, or let it hop between "
+        "the corners during a video. Scaling is smooth (bicubic by default) and the result is composited on the "
+        "CPU, so it needs no extra VRAM and does not flicker."
     )
+    OUTPUT_TOOLTIPS = ("The images with the watermark applied.",)
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -108,22 +116,22 @@ class LunaWatermark:
 
         return {
             "required": {
-                "images": ("IMAGE", {"description": "Input image or video batch."}),
-                "watermark_path": (sorted(files), {"image_upload": True, "description": "Select the watermark file (PNG recommended for transparency)."}),
-                "position": (["bottom-right", "bottom-left", "top-right", "top-left", "center"], {"default": "bottom-right", "description": "Static placement, or starting placement when randomize_position is enabled."}),
-                "scale": ("FLOAT", {"default": 0.2, "min": 0.01, "max": 1.0, "step": 0.01, "description": "Size relative to image width (0.2 = 20% width)."}),
-                "resampling": (["bicubic", "bilinear", "nearest", "area", "nearest-exact"], {"default": "bicubic", "description": "Scaling filter used when resizing the watermark. Bicubic is smooth; nearest keeps hard pixel edges."}),
-                "transparency": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01, "description": "1.0 = Opaque, 0.0 = Invisible."}),
-                "rotation": ("INT", {"default": 0, "min": 0, "max": 359, "step": 1, "description": "Clockwise watermark rotation in degrees."}),
-                "padding_x": ("INT", {"default": 20, "min": 0, "max": 4096, "description": "Horizontal inset from the selected edge, in pixels."}),
-                "padding_y": ("INT", {"default": 20, "min": 0, "max": 4096, "description": "Vertical inset from the selected edge, in pixels."}),
-                "optical_padding": ("BOOLEAN", {"default": False, "description": "Adjust placement by the watermark's visual center (useful for wide/rotated marks)."}),
-                "optical_strength": ("FLOAT", {"default": 0.4, "min": 0.0, "max": 1.0, "step": 0.05, "description": "Strength of optical-padding correction. 0 disables correction; 1 applies the full visual-center offset."}),
-                "random_switches": ("INT", {"default": 3, "min": 1, "max": 64, "description": "Number of times to switch position when randomize_position is enabled."}),
-                "fade": ("BOOLEAN", {"default": False, "description": "Enable fade in at start and end."}),
-                "fade_margin": ("FLOAT", {"default": 0.1, "min": 0.01, "max": 0.5, "step": 0.01, "description": "Fade duration as a percentage of total frames (0.1 = 10%)."}),
-                "randomize_position": ("BOOLEAN", {"default": False, "description": "Cycle through corner positions, starting at the selected position."}),
-                "random_seed": ("INT", {"default": 0, "min": 0, "max": 2147483647, "description": "0 derives a stable seed from the watermark file name."}),
+                "images": ("IMAGE", {"tooltip": "Input image or video batch."}),
+                "watermark_path": (sorted(files), {"image_upload": True, "tooltip": "Select the watermark file (PNG recommended for transparency)."}),
+                "position": (["bottom-right", "bottom-left", "top-right", "top-left", "center"], {"default": "bottom-right", "tooltip": "Static placement, or starting placement when randomize_position is enabled."}),
+                "scale": ("FLOAT", {"default": 0.2, "min": 0.01, "max": 1.0, "step": 0.01, "tooltip": "Size relative to image width (0.2 = 20% width)."}),
+                "resampling": (["bicubic", "bilinear", "nearest", "area", "nearest-exact"], {"default": "bicubic", "tooltip": "Scaling filter used when resizing the watermark. Bicubic is smooth; nearest keeps hard pixel edges."}),
+                "transparency": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "1.0 = Opaque, 0.0 = Invisible."}),
+                "rotation": ("INT", {"default": 0, "min": 0, "max": 359, "step": 1, "tooltip": "Clockwise watermark rotation in degrees."}),
+                "padding_x": ("INT", {"default": 20, "min": 0, "max": 4096, "tooltip": "Horizontal inset from the selected edge, in pixels."}),
+                "padding_y": ("INT", {"default": 20, "min": 0, "max": 4096, "tooltip": "Vertical inset from the selected edge, in pixels."}),
+                "optical_padding": ("BOOLEAN", {"default": False, "tooltip": "Adjust placement by the watermark's visual center (useful for wide/rotated marks)."}),
+                "optical_strength": ("FLOAT", {"default": 0.4, "min": 0.0, "max": 1.0, "step": 0.05, "tooltip": "Strength of optical-padding correction. 0 disables correction; 1 applies the full visual-center offset."}),
+                "random_switches": ("INT", {"default": 3, "min": 1, "max": 64, "tooltip": "Number of times to switch position when randomize_position is enabled."}),
+                "fade": ("BOOLEAN", {"default": False, "tooltip": "Enable fade in at start and end."}),
+                "fade_margin": ("FLOAT", {"default": 0.1, "min": 0.01, "max": 0.5, "step": 0.01, "tooltip": "Fade duration as a percentage of total frames (0.1 = 10%)."}),
+                "randomize_position": ("BOOLEAN", {"default": False, "tooltip": "Cycle through corner positions, starting at the selected position."}),
+                "random_seed": ("INT", {"default": 0, "min": 0, "max": 2147483647, "tooltip": "0 derives a stable seed from the watermark file name."}),
             },
             "optional": {
             }
@@ -227,11 +235,11 @@ class LunaWatermark:
 
             num_fade_frames = max(1, int(B * fade_margin)) if fade else 1
             log_luna(
-                "Watermark",
+                "Luna-Watermark",
                 f"stable compositor: output={output_device.type}, dtype={output_dtype}, frames={B}",
             )
             if mmap_path:
-                log_luna("Watermark", f"Disk-backed output: {mmap_path}")
+                log_luna("Luna-Watermark", f"Disk-backed output: {mmap_path}")
 
             for i in range(B):
                 # Determine current position. Random mode starts at the selected position.
@@ -281,6 +289,10 @@ class LunaWatermark:
                     out_i[y0:y1, x0:x1] = roi.permute(1, 2, 0).to(device=output_device, dtype=output_dtype)
 
                 pbar.update(1)
+
+            # Proactive cleanup: force GC to release mmap files immediately
+            gc.collect()
+            force_gc_and_cleanup(folder_paths.get_temp_directory())
 
             return (out,)
 

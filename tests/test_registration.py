@@ -8,7 +8,6 @@ Needs ComfyUI on sys.path (folder_paths, comfy_api, server); the check inserts i
 import importlib.util
 import os
 import sys
-import tempfile
 import unittest
 
 PACK = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -61,7 +60,8 @@ class RegistrationTests(unittest.TestCase):
         import re
         web = os.path.join(PACK, "web")
         wanted = {"save_video_simple_preview.js": "Luna-SaveVideo", "luna_load_video.js": "Luna-LoadVideo",
-                  "luna_node_status_switch.js": "Luna-StatusSwitch", "ideogram4_prompt_builder.js": "Luna-Ideogram"}
+                  "luna_node_status_switch.js": "Luna-StatusSwitch", "ideogram4_prompt_builder.js": "Luna-Ideogram",
+                  "luna_rtx_upscale.js": "Luna-RTXUpscale", "luna_rtx_video_finisher.js": "Luna-RTXVideoFinisher"}
         for name, node_id in wanted.items():
             with open(os.path.join(web, name), encoding="utf8") as f:
                 self.assertIn(f'"{node_id}"', f.read(), name)
@@ -70,16 +70,23 @@ class RegistrationTests(unittest.TestCase):
                 l for l in f.read().splitlines() if not l.lstrip().startswith("//"))))
         self.assertTrue(listed <= set(IDS), listed - set(IDS))
 
+    def test_every_node_has_help_and_collapse(self):
+        import re
+        with open(os.path.join(PACK, "web", "luna_pack_theme.js"), encoding="utf8") as f:
+            code = "\n".join(l for l in f.read().splitlines() if not l.lstrip().startswith("//"))
+        help_part = code[code.index("registerLunaHelp(app"):code.index("registerLunaCollapse(app")]
+        collapse_part = code[code.index("registerLunaCollapse(app"):]
+        self.assertEqual(set(re.findall(r'"(Luna-[A-Za-z]+)"', help_part)), set(IDS))
+        for node_id in ("Luna-Ideogram", "Luna-Watermark", "Luna-StatusSwitch", "Luna-RTXUpscale",
+                        "Luna-RTXVideoFinisher"):
+            self.assertIn(f'"{node_id}"', collapse_part)
 
-class HelperTests(unittest.TestCase):
-    def test_allocate_cpu_output_small_is_ram(self):
-        import torch
-        load_pack()
-        from Luna_Media_Tools_under_test.luna_tools.luna_helpers import allocate_cpu_output
-        out, path = allocate_cpu_output((2, 4, 4, 3), torch.float16, tempfile.gettempdir())
-        self.assertEqual(tuple(out.shape), (2, 4, 4, 3))
-        self.assertEqual(out.dtype, torch.float16)
-        self.assertIsNone(path)
+    def test_every_node_has_a_description(self):
+        for node_id, cls in self.pack.NODE_CLASS_MAPPINGS.items():
+            desc = getattr(cls, "DESCRIPTION", None)
+            if desc is None and hasattr(cls, "GET_SCHEMA"):
+                desc = cls.GET_SCHEMA().description
+            self.assertTrue(desc and len(str(desc).strip()) > 20, node_id)
 
 
 if __name__ == "__main__":

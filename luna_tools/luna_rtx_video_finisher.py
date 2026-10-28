@@ -1,3 +1,9 @@
+# Derived from the Deno RTX VFX nodes, comfyui-deno-custom-nodes
+# (https://github.com/Deno2026/comfyui-deno-custom-nodes), commit 0cd75f4, GPL-3.0
+# (see THIRD_PARTY_NOTICES.md). Source file: deno_rtx_vfx_video_finisher.py
+# Changes: renamed to Luna-RTXVideoFinisher (category Luna-Media-Tools); imports point at the luna_*
+# modules; DESCRIPTION rewritten for this pack; input tooltips and OUTPUT_TOOLTIPS added;
+# registered as a V1 node. The processing code is as upstream.
 """Luna-RTXVideoFinisher.
 
 Runs an optional same-size NVIDIA RTX pass (Denoise / Deblur) and an optional
@@ -8,8 +14,7 @@ collecting a Python list and calling torch.stack(), which removes the final
 memory peak that hurts low-spec video / LTX workflows.
 
 This node intentionally reuses the runtime/import/error helpers from
-luna_rtx_upscale so the existing Luna-RTXUpscale
-node stays untouched and backward compatible.
+luna_rtx_upscale so Luna-RTXUpscale stays untouched and backward compatible.
 """
 
 import contextlib
@@ -20,14 +25,16 @@ from .luna_resolution_common import COMMON_RATIOS, RESIZE_METHODS, validate_comb
 from .luna_rtx_upscale import (
     RTX_VFX_DEFAULT_DIVISIBLE_BY,
     RTX_VFX_DIVISIBLE_BY_VALUES,
-    RTX_VFX_INSTALL_GUIDE_URL,
+    RTX_VFX_INSTALL_STEPS,
     _create_vfx_effect,
     _fit_frame_to_target_aspect,
     _import_vfx,
     _quality_attr,
+    _run_vfx_frame,
     _safe_cuda_device_index,
     _safe_divisible_by,
     _target_size,
+    _vfx_output_width,
 )
 
 FIRST_PASS_CHOICES = ["Off", "Denoise", "Deblur"]
@@ -47,7 +54,7 @@ def _maybe_vfx_effect(VideoSuperRes, enabled, mode, device_index, out_width, out
         return
     quality = getattr(VideoSuperRes.QualityLevel, _quality_attr(mode))
     with _create_vfx_effect(VideoSuperRes, quality, device_index, mode) as effect:
-        effect.output_width = int(out_width)
+        effect.output_width = _vfx_output_width(out_width)
         effect.output_height = int(out_height)
         effect.load()
         yield effect
@@ -55,40 +62,35 @@ def _maybe_vfx_effect(VideoSuperRes, enabled, mode, device_index, out_width, out
 
 class LunaRTXVideoFinisher:
     DESCRIPTION = (
-        "RTX Video Super Resolution (2 Pass): optional Denoise/Deblur same-size pass, then optional "
-        "VSR/High Bitrate upscale pass, frame-by-frame in one node. Low RAM mode "
-        "preallocates the output on CPU and avoids a full intermediate batch.\n\n"
-        "Needs NVIDIA RTX VFX installed.\n"
-        "1. Close every ComfyUI window first.\n"
-        "2. Click this node's `How to install` button.\n"
-        "3. Follow the visual web install guide.\n"
-        "4. Download the ZIP from that guide page.\n"
-        r"5. Open `ComfyUI\custom_nodes\deno-custom-nodes\tools`." "\n"
-        "6. Move `install_rtx_vfx_bat.zip` into that `tools` folder.\n"
-        "7. Right-click the ZIP inside `tools`, choose `Extract All`, then open the extracted installer files.\n"
-        "8. Double-click `install_rtx_vfx.bat` from inside `tools`.\n"
-        "9. If it asks `Install RTX VFX here?`, type `Y` only when the shown Windows path is inside this ComfyUI app. If it looks wrong, type `N` and stop.\n"
-        "10. Wait for the green `INSTALL COMPLETE` message, then start ComfyUI again.\n"
-        f"Full install guide:\n{RTX_VFX_INSTALL_GUIDE_URL}"
+        "Luna-RTXVideoFinisher: cleans up and upscales video frames with NVIDIA RTX VFX in two passes, "
+        "frame by frame, inside one node.\n\n"
+        "Pass 1 (first_pass) is an optional same-size Denoise or Deblur. Pass 2 (upscale_pass) is an optional "
+        "VSR or High Bitrate upscale to the size set by resize_type. Setting both passes to Off returns the "
+        "frames unchanged. The finished batch is written frame by frame into one preallocated tensor, so "
+        "the full in-between batch is never held in memory.\n\n"
+        "Needs an NVIDIA RTX GPU and the NVIDIA RTX VFX package (`nvvfx`, from nvidia-vfx 0.2.0.0 or newer). "
+        "The pack loads without it; the node reports what is missing when it runs.\n\n"
+        + RTX_VFX_INSTALL_STEPS
     )
+    OUTPUT_TOOLTIPS = ("The finished frame batch.",)
 
     @classmethod
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "images": ("IMAGE",),
-                "first_pass": (FIRST_PASS_CHOICES, {"default": "Deblur"}),
-                "first_quality": (QUALITY_CHOICES, {"default": "Ultra"}),
-                "upscale_pass": (UPSCALE_PASS_CHOICES, {"default": "High Bitrate"}),
-                "upscale_quality": (QUALITY_CHOICES, {"default": "High"}),
-                "resize_type": (FINISHER_RESIZE_TYPES, {"default": "Keep Ratio"}),
-                "scale": ("FLOAT", {"default": 2.0, "min": 1.0, "max": 4.0, "step": 0.05}),
-                "megapixels": ("FLOAT", {"default": 4.0, "min": 0.01, "max": 64.0, "step": 0.01}),
-                "width": ("INT", {"default": 3840, "min": 64, "max": 8192, "step": 8}),
-                "height": ("INT", {"default": 2160, "min": 64, "max": 8192, "step": 8}),
-                "divisible_by": (RTX_VFX_DIVISIBLE_BY_VALUES, {"default": RTX_VFX_DEFAULT_DIVISIBLE_BY}),
-                "ratio_preset": (COMMON_RATIOS, {"default": "16:9"}),
-                "resize_method": (RESIZE_METHODS, {"default": "Center Crop (Fill)"}),
+                "images": ("IMAGE", {"tooltip": "Input video frame batch to finish with one or two RTX VFX passes."}),
+                "first_pass": (FIRST_PASS_CHOICES, {"default": "Deblur", "tooltip": "Optional same-size first pass, Denoise or Deblur. Off skips it."}),
+                "first_quality": (QUALITY_CHOICES, {"default": "Ultra", "tooltip": "Quality/strength of the first pass."}),
+                "upscale_pass": (UPSCALE_PASS_CHOICES, {"default": "High Bitrate", "tooltip": "Optional second pass: VSR or High Bitrate upscale. Off skips it."}),
+                "upscale_quality": (QUALITY_CHOICES, {"default": "High", "tooltip": "Quality of the upscale pass."}),
+                "resize_type": (FINISHER_RESIZE_TYPES, {"default": "Keep Ratio", "tooltip": "How the final output size is chosen."}),
+                "scale": ("FLOAT", {"default": 2.0, "min": 1.0, "max": 4.0, "step": 0.05, "tooltip": "Scale multiplier used by Scale resizing."}),
+                "megapixels": ("FLOAT", {"default": 4.0, "min": 0.01, "max": 64.0, "step": 0.01, "tooltip": "Target total output size in megapixels for Keep Ratio and Preset Ratio resizing."}),
+                "width": ("INT", {"default": 3840, "min": 64, "max": 8192, "step": 8, "tooltip": "Manual output width in pixels."}),
+                "height": ("INT", {"default": 2160, "min": 64, "max": 8192, "step": 8, "tooltip": "Manual output height in pixels."}),
+                "divisible_by": (RTX_VFX_DIVISIBLE_BY_VALUES, {"default": RTX_VFX_DEFAULT_DIVISIBLE_BY, "tooltip": "Round the output size to a multiple the VFX runtime handles well."}),
+                "ratio_preset": (COMMON_RATIOS, {"default": "16:9", "tooltip": "Target aspect ratio used in Preset Ratio resizing."}),
+                "resize_method": (RESIZE_METHODS, {"default": "Center Crop (Fill)", "tooltip": "Crop-fill or fit with black bars, when the output ratio differs from the input."}),
             },
         }
 
@@ -221,15 +223,17 @@ class LunaRTXVideoFinisher:
                         )
 
                         if first_effect is not None:
-                            first_result = first_effect.run(frame)
-                            frame = torch.from_dlpack(first_result.image).clone()
+                            frame = _run_vfx_frame(
+                                first_effect, frame, int(source_width), int(source_height), same_size=True,
+                            )
 
                         if second_effect is not None:
                             frame = _fit_frame_to_target_aspect(
                                 frame, int(target_width), int(target_height), resize_method
                             )
-                            second_result = second_effect.run(frame)
-                            frame = torch.from_dlpack(second_result.image).clone()
+                            frame = _run_vfx_frame(
+                                second_effect, frame, int(target_width), int(target_height),
+                            )
 
                         enhanced = frame.permute(1, 2, 0).contiguous()
                         # clamp in the source (float32) precision first, then a

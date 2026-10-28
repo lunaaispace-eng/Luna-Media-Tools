@@ -16,8 +16,11 @@ cd ComfyUI/custom_nodes
 git clone https://github.com/lunaaispace-eng/Luna-Media-Tools
 ```
 
-Dependencies are in `requirements.txt` (Pillow, numpy; everything else comes with ComfyUI). The two RTX nodes
-also need NVIDIA RTX VFX (`nvvfx`) when they run; the pack loads without it.
+Dependencies are in `requirements.txt` (Pillow, numpy, psutil; everything else comes with ComfyUI). The two RTX
+nodes also need NVIDIA RTX VFX (`nvvfx`, the `nvidia-vfx` package, 0.2.0.0 or newer) when they run; the pack
+loads without it. They use the `nvvfx` that is already installed in ComfyUI's Python (the same one the
+ComfyUI Nvidia VFX nodes use). If it is missing, the node's help (the (i) button) and its error message give
+the install steps for this pack, and the node's "Copy install steps" button copies them.
 
 ## Node tree
 

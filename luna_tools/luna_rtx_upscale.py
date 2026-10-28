@@ -1,3 +1,10 @@
+# Derived from the Deno RTX VFX nodes, comfyui-deno-custom-nodes
+# (https://github.com/Deno2026/comfyui-deno-custom-nodes), commit 0cd75f4, GPL-3.0
+# (see THIRD_PARTY_NOTICES.md). Source file: deno_rtx_vfx_easy_upscale.py
+# Changes: renamed to Luna-RTXUpscale (category Luna-Media-Tools); imports point at the luna_*
+# modules; the runtime lookup finds the nvvfx already installed in this Python (luna_rtx_runtime);
+# install help, error texts and DESCRIPTION rewritten for this pack; input tooltips and
+# OUTPUT_TOOLTIPS added; registered as a V1 node. The processing code is as upstream.
 import math
 from typing import Tuple
 
@@ -14,6 +21,8 @@ from .luna_resolution_common import (
 )
 from .luna_rtx_runtime import (
     current_nvvfx_package_path,
+    find_installed_nvvfx,
+    installed_nvvfx_version,
     is_path_relative_to,
     loaded_broadcast_vfx_module_paths,
     loaded_nvvfx_module_paths,
@@ -45,10 +54,22 @@ RESIZE_TYPES = ["Scale", "Keep Ratio", "Manual", "Preset Ratio", "Same Size"]
 # RTX VFX scales video frames directly; exact video ratios avoid unintended crop/pad.
 RTX_VFX_DIVISIBLE_BY_VALUES = ["1", "8", "16", "32", "64", "128"]
 RTX_VFX_DEFAULT_DIVISIBLE_BY = "1"
-RTX_VFX_INSTALL_GUIDE_URL = (
-    "https://deno2026.github.io/comfyui-deno-custom-nodes/rtx-vfx-install/"
+RTX_VFX_INSTALL_STEPS = (
+    "To install NVIDIA RTX VFX for Luna-Media-Tools:\n"
+    "1. You need a Windows PC with an NVIDIA RTX GPU, NVIDIA driver 570.65 or newer, and a CUDA build of PyTorch.\n"
+    "2. Close every ComfyUI window.\n"
+    "3. Open a terminal in your ComfyUI folder and run this with the Python that ComfyUI uses "
+    "(for ComfyUI Easy-Install and Portable that is python_embeded):\n"
+    "   python_embeded\\python.exe -m pip install --upgrade --no-deps --index-url https://pypi.nvidia.com \"nvidia-vfx>=0.2.0.0\"\n"
+    "4. Start ComfyUI again and run the node. If another RTX VFX node already works in this ComfyUI, "
+    "NVIDIA RTX VFX is already installed and nothing more is needed.\n"
+    "5. Only if step 3 installs but the node still cannot create the effect (for example a Windows user folder "
+    "with non-English letters): copy the installed `nvvfx` folder to a plain path such as "
+    "C:\\Users\\Public\\Luna\\nvvfx_runtime\\py312\\runtime1\\nvvfx (py312 must match your Python version), "
+    "then write the folder that contains `nvvfx` (C:\\Users\\Public\\Luna\\nvvfx_runtime\\py312\\runtime1) into "
+    "custom_nodes\\Luna-Media-Tools\\luna_tools\\tools\\Luna_RTX_VFX_runtime_path.txt, or set the "
+    "LUNA_RTX_VFX_RUNTIME environment variable to it, and restart ComfyUI."
 )
-RTX_VFX_INSTALLER_LOCAL_HINT = r"custom_nodes\deno-custom-nodes\tools\install_rtx_vfx.bat"
 
 
 def _safe_divisible_by(divisible_by) -> int:
@@ -197,6 +218,33 @@ def _fit_frame_to_target_aspect(frame, target_width: int, target_height: int, re
     return F.pad(frame, (pad_left, pad_right, 0, 0), mode="constant", value=0.0).contiguous()
 
 
+def _vfx_output_width(width: int) -> int:
+    # nvidia-vfx 0.1.0.1 can corrupt output rows at widths not divisible by 8.
+    # Align only the native buffer; public output sizes remain unchanged.
+    return ((int(width) + 7) // 8) * 8
+
+
+def _run_vfx_frame(effect, frame, target_width: int, target_height: int, same_size: bool = False):
+    if same_size:
+        # Denoise/Deblur require matching input/output dimensions. Replicate
+        # the right edge temporarily, then remove only those padded columns.
+        pad_width = _vfx_output_width(target_width) - int(target_width)
+        if pad_width:
+            frame = F.pad(frame, (0, pad_width, 0, 0), mode="replicate").contiguous()
+
+    # NVIDIA owns this buffer and may reuse it on the next run or free it on
+    # close. Take ownership before cropping, resizing, or running another pass.
+    enhanced = torch.from_dlpack(effect.run(frame).image).clone()
+    if same_size:
+        return enhanced[:, :, :int(target_width)].contiguous()
+    if int(enhanced.shape[2]) != int(target_width):
+        enhanced = F.interpolate(
+            enhanced.unsqueeze(0), size=(int(target_height), int(target_width)),
+            mode="bilinear", align_corners=False,
+        )[0]
+    return enhanced
+
+
 def _import_vfx():
     runtime_path = prefer_rtx_vfx_runtime_path()
     loaded_path = current_nvvfx_package_path()
@@ -237,27 +285,25 @@ def _import_vfx():
 
 
 def _rtx_vfx_easy_install_note() -> str:
-    return (
-        "Easy install steps: close every ComfyUI window, click this node's How to install button, "
-        "follow the visual web install guide, download the ZIP from that guide page, move it into "
-        r"ComfyUI\custom_nodes\deno-custom-nodes\tools, extract it there, run install_rtx_vfx.bat "
-        "from the extracted installer files inside that tools folder, type Y only if the shown Windows path is inside your ComfyUI app; if it looks wrong, type N and stop, then wait for the green "
-        "INSTALL COMPLETE message, then start ComfyUI again. "
-        f"Full install guide: {RTX_VFX_INSTALL_GUIDE_URL}."
-    )
+    return RTX_VFX_INSTALL_STEPS
 
 
 def _vfx_runtime_status_note() -> str:
     runtime_path = read_rtx_vfx_runtime_path()
     loaded_path = current_nvvfx_package_path()
+    installed_path = find_installed_nvvfx()
+    installed_version = installed_nvvfx_version()
     native_modules = loaded_nvvfx_module_paths()
     broadcast_modules = loaded_broadcast_vfx_module_paths()
-    runtime_text = str(runtime_path) if runtime_path is not None else "not prepared"
-    loaded_text = str(loaded_path) if loaded_path is not None else "unknown"
+    runtime_text = str(runtime_path) if runtime_path is not None else "none set (the nvvfx installed in this Python is used)"
+    installed_text = str(installed_path) if installed_path is not None else "not installed in this Python"
+    if installed_path is not None and installed_version:
+        installed_text += f" (nvidia-vfx {installed_version})"
+    loaded_text = str(loaded_path) if loaded_path is not None else "not loaded yet"
     native_text = ", ".join(f"{name}={path}" for name, path in native_modules.items()) or "none"
     broadcast_text = "; ".join(broadcast_modules[:5]) if broadcast_modules else "none"
     return (
-        f" DENO runtime path: {runtime_text}. Loaded nvvfx path: {loaded_text}. "
+        f" Luna RTX runtime folder: {runtime_text}. Installed nvvfx: {installed_text}. Loaded nvvfx path: {loaded_text}. "
         f"Loaded native modules: {native_text}. Loaded NVIDIA Broadcast VFX DLLs: {broadcast_text}."
     )
 
@@ -278,10 +324,10 @@ def _vfx_runtime_error_message(exc: Exception, mode: str, device_index: int) -> 
             "DLLs are already loaded in this ComfyUI process. "
             f"Selected mode: {mode}. Selected GPU: {gpu_name} (device {device_index}). "
             "Another RTX/Broadcast-based node can still work because it may use NVIDIA Broadcast's Upscale effect, "
-            "but DENO's nvidia-vfx VideoSuperRes path cannot safely use that mixed native runtime. "
+            "but the nvidia-vfx VideoSuperRes path that Luna-Media-Tools uses cannot safely use that mixed native runtime. "
             + _vfx_runtime_status_note()
             + " Close ComfyUI, disable the Broadcast-based RTX node, then start ComfyUI again; or use that RTX node "
-            "for this workflow until DENO adds a dedicated Broadcast fallback engine. "
+            "for this workflow. "
             "Original NVIDIA VFX error: "
             + original
         )
@@ -293,7 +339,7 @@ def _vfx_runtime_error_message(exc: Exception, mode: str, device_index: int) -> 
         "Check that the PC has an NVIDIA RTX GPU with Tensor Cores, Windows 10/11, and NVIDIA driver 570.65 or newer "
         "(595 or newer for TCC devices). If the PC has multiple NVIDIA GPUs, try the correct device index. "
         + _vfx_runtime_status_note()
-        + " If DENO runtime path is not prepared, "
+        + " If NVIDIA RTX VFX is not installed in this Python, "
         + _rtx_vfx_easy_install_note()
         + " "
         "Original NVIDIA VFX error: "
@@ -334,37 +380,33 @@ def _safe_cuda_device_index(device: int) -> int:
 
 class LunaRTXUpscale:
     DESCRIPTION = (
-        "RTX VFX install steps for beginners.\n\n"
-        "1. Close every ComfyUI window first.\n"
-        "2. Click this node's `How to install` button.\n"
-        "3. Follow the visual web install guide.\n"
-        "4. Download the ZIP from that guide page.\n"
-        r"5. Open `ComfyUI\custom_nodes\deno-custom-nodes\tools`." "\n"
-        "6. Move `install_rtx_vfx_bat.zip` into that `tools` folder.\n"
-        "7. Right-click the ZIP inside `tools`, choose `Extract All`, then open the extracted installer files.\n"
-        "8. Double-click `install_rtx_vfx.bat` from inside `tools`.\n"
-        "9. If it asks `Install RTX VFX here?`, type `Y` only when the shown Windows path is inside this ComfyUI app. If it looks wrong, type `N` and stop.\n"
-        "10. Wait until the BAT shows the green `INSTALL COMPLETE` message.\n"
-        "11. Start ComfyUI again, then run this node.\n\n"
-        "Full install guide:\n"
-        f"{RTX_VFX_INSTALL_GUIDE_URL}"
+        "Luna-RTXUpscale: upscales, sharpens or cleans images and video frames with NVIDIA RTX VFX, one frame "
+        "at a time on the GPU.\n\n"
+        "mode picks the effect and its quality: Video SR (VSR) and High Bitrate make the picture bigger; "
+        "Denoise and Deblur keep the same size and clean it up. resize_type sets the output size: a scale "
+        "multiplier, a megapixel target that keeps the ratio, a manual width and height, or a ratio preset "
+        "(crop or letterbox to fit).\n\n"
+        "Needs an NVIDIA RTX GPU and the NVIDIA RTX VFX package (`nvvfx`, from nvidia-vfx 0.2.0.0 or newer). "
+        "The pack loads without it; the node reports what is missing when it runs.\n\n"
+        + RTX_VFX_INSTALL_STEPS
     )
+    OUTPUT_TOOLTIPS = ("The enhanced frame batch.",)
 
     @classmethod
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "images": ("IMAGE",),
-                "mode": (QUALITY_LEVELS, {"default": "VSR Medium"}),
-                "resize_type": (RESIZE_TYPES, {"default": "Keep Ratio"}),
-                "scale": ("FLOAT", {"default": 2.0, "min": 1.0, "max": 4.0, "step": 0.05}),
-                "megapixels": ("FLOAT", {"default": 2.0, "min": 0.01, "max": 64.0, "step": 0.01}),
-                "width": ("INT", {"default": 1920, "min": 64, "max": 8192, "step": 8}),
-                "height": ("INT", {"default": 1080, "min": 64, "max": 8192, "step": 8}),
-                "divisible_by": (RTX_VFX_DIVISIBLE_BY_VALUES, {"default": RTX_VFX_DEFAULT_DIVISIBLE_BY}),
-                "device": ("INT", {"default": 0, "min": 0, "max": 16, "step": 1}),
-                "ratio_preset": (COMMON_RATIOS, {"default": "16:9"}),
-                "resize_method": (RESIZE_METHODS, {"default": "Center Crop (Fill)"}),
+                "images": ("IMAGE", {"tooltip": "Input image or video frame batch to enhance with NVIDIA RTX VFX."}),
+                "mode": (QUALITY_LEVELS, {"default": "VSR Medium", "tooltip": "RTX VFX operation: upscale (VSR, High Bitrate), denoise, or deblur, each at Low to Ultra quality."}),
+                "resize_type": (RESIZE_TYPES, {"default": "Keep Ratio", "tooltip": "How the output size is chosen for the upscale modes."}),
+                "scale": ("FLOAT", {"default": 2.0, "min": 1.0, "max": 4.0, "step": 0.05, "tooltip": "Scale multiplier used by Scale resizing."}),
+                "megapixels": ("FLOAT", {"default": 2.0, "min": 0.01, "max": 64.0, "step": 0.01, "tooltip": "Target total output size in megapixels for Keep Ratio and Preset Ratio resizing."}),
+                "width": ("INT", {"default": 1920, "min": 64, "max": 8192, "step": 8, "tooltip": "Manual output width in pixels."}),
+                "height": ("INT", {"default": 1080, "min": 64, "max": 8192, "step": 8, "tooltip": "Manual output height in pixels."}),
+                "divisible_by": (RTX_VFX_DIVISIBLE_BY_VALUES, {"default": RTX_VFX_DEFAULT_DIVISIBLE_BY, "tooltip": "Round the output size to a multiple the VFX runtime handles well."}),
+                "device": ("INT", {"default": 0, "min": 0, "max": 16, "step": 1, "tooltip": "GPU device index for NVIDIA RTX VFX."}),
+                "ratio_preset": (COMMON_RATIOS, {"default": "16:9", "tooltip": "Target aspect ratio used in Preset Ratio resizing."}),
+                "resize_method": (RESIZE_METHODS, {"default": "Center Crop (Fill)", "tooltip": "Crop-fill or fit with black bars, when the output ratio differs from the input."}),
             },
         }
 
@@ -451,7 +493,7 @@ class LunaRTXUpscale:
 
         with torch.inference_mode():
             with _create_vfx_effect(VideoSuperRes, quality, device_index, mode) as effect:
-                effect.output_width = int(target_width)
+                effect.output_width = _vfx_output_width(target_width)
                 effect.output_height = int(target_height)
                 effect.load()
 
@@ -459,8 +501,9 @@ class LunaRTXUpscale:
                     frame = images[index, :, :, :3].to(device=cuda_device, dtype=torch.float32).permute(2, 0, 1).contiguous()
                     if not _same_size_only(mode):
                         frame = _fit_frame_to_target_aspect(frame, int(target_width), int(target_height), resize_method)
-                    result = effect.run(frame)
-                    enhanced = torch.from_dlpack(result.image).clone().permute(1, 2, 0).contiguous()
+                    enhanced = _run_vfx_frame(
+                        effect, frame, int(target_width), int(target_height), _same_size_only(mode),
+                    ).permute(1, 2, 0).contiguous()
                     # clamp in float32 then a single cast for storage (avoids
                     # the slow CPU-float16 clamp path in Low RAM mode).
                     out[index].copy_(

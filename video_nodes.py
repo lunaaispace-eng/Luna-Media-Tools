@@ -1,8 +1,9 @@
 """Luna-SaveVideo — an IMAGE batch to a video file, with a prompt sidecar.
 
 Derived from `nodes_enhanced_video_combine.py` in ComfyUI-DaSiWa-Nodes
-(https://github.com/DaSiWa/ComfyUI-DaSiWa-Nodes), Apache License 2.0.
-This pack is Apache-2.0 as well, so the licence carries over unchanged.
+(https://github.com/darksidewalker/ComfyUI-DaSiWa-Nodes), Apache License 2.0 (the version this was taken from;
+the upstream repo is GPL-3.0 since its 08-04 licence change).
+This pack is GPL-3.0; Apache-2.0 code may be combined into a GPL-3.0 work, and this notice stays.
 
 Changes from the original, as Apache-2.0 section 4(b) requires them to be stated:
   - renamed the node (now Luna-SaveVideo) and moved it to the Luna-Media-Tools category
@@ -37,8 +38,8 @@ try:
 except ImportError:
     web = None
     PromptServer = None
-def log_dasiwa(scope, message):
-    print(f"[SaveSimple/{scope}] {message}")
+def log_luna(scope, message):
+    print(f"[Luna-SaveVideo] {message}")
 
 
 _CODEC_OPTIONS = ["Auto", "AV1", "VP9", "H.265 (HEVC)", "H.264"]
@@ -64,7 +65,7 @@ _MAX_FFMPEG_STDERR_BYTES = 4 * 1024 * 1024
 
 
 def _log(message):
-    log_dasiwa("Enhanced Video Combine", message)
+    log_luna("Enhanced Video Combine", message)
 
 
 def find_ffmpeg():

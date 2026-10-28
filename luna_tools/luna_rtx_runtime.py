@@ -1,10 +1,19 @@
+# Derived from the Deno RTX VFX nodes, comfyui-deno-custom-nodes
+# (https://github.com/Deno2026/comfyui-deno-custom-nodes), commit 0cd75f4, GPL-3.0
+# (see THIRD_PARTY_NOTICES.md). Source file: deno_rtx_vfx_runtime.py
+# Changes: marker file renamed to Luna_RTX_VFX_runtime_path.txt (looked for in this pack's
+# luna_tools/tools folder); the LUNA_RTX_VFX_RUNTIME environment variable can name the runtime
+# folder instead; added find_installed_nvvfx() / installed_nvvfx_version(), which look at the
+# nvvfx that is already installed in this Python WITHOUT importing it. Nothing here imports
+# nvvfx, so the pack loads without it.
 import os
 import sys
 from pathlib import Path
 from typing import Optional
 
 
-RUNTIME_MARKER_NAME = "DENO_RTX_VFX_runtime_path.txt"
+RUNTIME_MARKER_NAME = "Luna_RTX_VFX_runtime_path.txt"
+RUNTIME_ENV_VAR = "LUNA_RTX_VFX_RUNTIME"
 
 
 def expected_python_runtime_segment() -> str:
@@ -21,12 +30,46 @@ def runtime_marker_path(package_dir: Optional[Path] = None) -> Path:
     return root / "tools" / RUNTIME_MARKER_NAME
 
 
-def read_rtx_vfx_runtime_path(package_dir: Optional[Path] = None) -> Optional[Path]:
-    marker = runtime_marker_path(package_dir)
+def find_installed_nvvfx() -> Optional[Path]:
+    """The folder of the nvvfx package that this Python already has, found without importing it
+    (importing nvvfx loads native DLLs, which must wait until a node runs)."""
+    if "nvvfx" in sys.modules:
+        return current_nvvfx_package_path()
     try:
-        raw_path = marker.read_text(encoding="utf-8").strip().strip('"')
-    except OSError:
+        import importlib.util
+
+        spec = importlib.util.find_spec("nvvfx")
+    except (ImportError, ValueError):
         return None
+    if spec is None:
+        return None
+    locations = list(spec.submodule_search_locations or [])
+    if locations:
+        return Path(locations[0])
+    return Path(spec.origin).parent if spec.origin else None
+
+
+def installed_nvvfx_version() -> Optional[str]:
+    """Version of the nvidia-vfx package installed in this Python, or None."""
+    try:
+        import importlib.metadata as metadata
+
+        return metadata.version("nvidia-vfx")
+    except Exception:
+        return None
+
+
+def read_rtx_vfx_runtime_path(package_dir: Optional[Path] = None) -> Optional[Path]:
+    """The prepared runtime folder (the one that contains `nvvfx`), if one was set up.
+    Set by the LUNA_RTX_VFX_RUNTIME environment variable, else by the marker file. When neither
+    is set the nvvfx already installed in this Python is used."""
+    raw_path = os.environ.get(RUNTIME_ENV_VAR, "").strip().strip('"')
+    if not raw_path:
+        marker = runtime_marker_path(package_dir)
+        try:
+            raw_path = marker.read_text(encoding="utf-8").strip().strip('"')
+        except OSError:
+            return None
 
     if not raw_path:
         return None

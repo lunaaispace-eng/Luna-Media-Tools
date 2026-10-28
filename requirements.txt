@@ -1,6 +1,7 @@
 # What the code in this pack needs beyond ComfyUI itself.
 # torch, av (PyAV), aiohttp and folder_paths come with ComfyUI.
 Pillow
+psutil
 numpy
 # Optional, only when Luna-RTXUpscale / Luna-RTXVideoFinisher RUN (imported lazily, the pack
 # loads without it): NVIDIA RTX VFX, the `nvvfx` Python module. Install it as the node's

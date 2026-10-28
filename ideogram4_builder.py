@@ -298,7 +298,7 @@ class Ideogram4PromptBuilderLuna(io.ComfyNode):
             search_aliases=["ideogram", "caption", "bbox", "prompt builder", "json prompt"],
             is_experimental=True,
             description="""
-Visual prompt builder for Ideogram 4's structured JSON caption format.
+Luna-Ideogram: a visual prompt builder for Ideogram 4's structured JSON caption format.
 
 Drag on the canvas to draw regions; select a region to set its type (obj/text),  
 description, text, and color palette. Set the background and optional style fields  

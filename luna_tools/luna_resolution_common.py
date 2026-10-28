@@ -1,3 +1,6 @@
+# Derived from the Deno RTX VFX nodes, comfyui-deno-custom-nodes
+# (https://github.com/Deno2026/comfyui-deno-custom-nodes), commit 0cd75f4, GPL-3.0
+# (see THIRD_PARTY_NOTICES.md). Source file: deno_resolution_common.py. Unchanged.
 import math
 from typing import Tuple
 

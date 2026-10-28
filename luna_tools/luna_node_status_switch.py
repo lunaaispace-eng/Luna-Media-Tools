@@ -1,5 +1,9 @@
+# Derived from ComfyUI-DaSiWa-Nodes (https://github.com/darksidewalker/ComfyUI-DaSiWa-Nodes),
+# commit ab364c5, GPL-3.0 (see THIRD_PARTY_NOTICES.md). Source file: nodes/nodes_status_switch.py
+# Changes: renamed to Luna-StatusSwitch (category Luna-Media-Tools); DESCRIPTION rewritten; input
+# 'description' keys became 'tooltip'; OUTPUT_TOOLTIPS added; registered as a V1 node.
 """
-Luna-StatusSwitch (derived from the status switch node in ComfyUI-DaSiWa-Nodes, Apache-2.0)
+Luna-StatusSwitch
 
 Mutes or bypasses target nodes based on a boolean toggle.
 
@@ -33,20 +37,26 @@ ANY = AnyType("*")
 
 class LunaStatusSwitch:
     DESCRIPTION = (
-        "Luna-StatusSwitch: mutes or bypasses connected target nodes "
-        "based on a boolean state, with an enabled output for chaining switches."
+        "Luna-StatusSwitch: one on/off switch that turns other nodes on or off.\n\n"
+        "Wire any output of a node you want to control into a target socket (a new empty socket appears each "
+        "time you connect one). While `enabled` matches `trigger_on` the targets run normally. Otherwise they are "
+        "muted (they do not run, and their outputs are missing) or bypassed (they are skipped and their input "
+        "passes straight through), as chosen by `action`. The change is applied when you queue the prompt.\n\n"
+        "The enabled_out output carries the switch state, so one toggle can drive a chain of switches; each "
+        "switch applies its own `trigger_on` and `action`."
     )
+    OUTPUT_TOOLTIPS = ("The switch state, to drive another Luna-StatusSwitch.",)
 
     @classmethod
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "enabled": ("BOOLEAN", {"default": True, "description": "Master toggle to activate or deactivate the switch."}),
+                "enabled": ("BOOLEAN", {"default": True, "tooltip": "Master toggle to activate or deactivate the switch."}),
                 "trigger_on": (
                     ["true \u2192 active", "false \u2192 active"],
-                    {"default": "true \u2192 active", "description": "Define if the switch is active when the boolean is True or False."},
+                    {"default": "true \u2192 active", "tooltip": "Define if the switch is active when the boolean is True or False."},
                 ),
-                "action": (["mute", "bypass"], {"default": "bypass", "description": "Choose whether to Mute (stop execution) or Bypass (pass through) targets."}),
+                "action": (["mute", "bypass"], {"default": "bypass", "tooltip": "Choose whether to Mute (stop execution) or Bypass (pass through) targets."}),
             },
             "hidden": {
                 "unique_id": "UNIQUE_ID",
