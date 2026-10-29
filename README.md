@@ -2,7 +2,8 @@
 
 General image and video tools for ComfyUI, ten nodes in one pack: save an image, save a video on the
 GPU, load a video with its sound, cast a batch to fp16, remove the VAE pixel grid, draw an Ideogram 4
-prompt on a canvas, overlay a watermark, switch other nodes on and off, upscale with NVIDIA RTX VFX, and add in-between frames with RTX frame generation.
+prompt on a canvas, overlay a watermark, switch other nodes on and off, upscale with NVIDIA RTX VFX, and add
+in-between frames with RTX frame generation.
 
 Every node's id is its display name, and every node sits in the category `Luna-Media-Tools`.
 Each node has an (i) help button on its title bar, and the big ones a chevron that folds the settings away.
@@ -42,18 +43,21 @@ python_embeded\python.exe -m pip install nvidia-vfx
 
 ## Replaces
 
-Luna-Media-Tools replaces ComfyUI-SaveSimple (general nodes), ComfyUI-DeGrid, ComfyUI-Ideogram4-Luna and
-ComfyUI-LunaTools. Node ids changed with the rename, so workflows saved with the old nodes need those nodes
-swapped for the new ones. Remove the old folders from `custom_nodes` when you install this pack.
+Luna-Media-Tools replaces ComfyUI-SaveSimple (general nodes), ComfyUI-Ideogram4-Luna and ComfyUI-LunaTools,
+and carries a copy of the VAE de-grid from ComfyUI-DeGrid (that standalone pack stays available). Node ids changed
+with the rename, so workflows saved with the old nodes need those nodes swapped for the new ones. Remove the old
+folders from `custom_nodes` when you install this pack (except ComfyUI-DeGrid, whose node id differs).
 
 ## Tests
 
+Run from the `tests` folder with pytest:
+
 ```
-python -m unittest discover -s tests -v
+python -m pytest . --rootdir=.
 ```
 
-(or pytest). The registration test needs a ComfyUI folder on the path; set `COMFYUI_DIR` if it is not
-`E:\ComfyUI-Easy-Install\ComfyUI`.
+(`python -m unittest discover -s tests` runs a part of them.) The registration test needs a ComfyUI folder on the
+path; set `COMFYUI_DIR` if it is not `E:\ComfyUI-Easy-Install\ComfyUI`.
 
 ## Licence
 
