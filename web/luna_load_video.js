@@ -14,6 +14,7 @@
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 import { LUNA } from "./luna_theme.mjs";
+import { keepNodeWidth } from "./luna_widget_width.mjs";
 
 const NODE = "Luna-LoadVideo";
 const PANEL = ["frame_grid", "every_nth", "audio", "precision", "memory_cap_gb"];
@@ -282,6 +283,7 @@ function buildFace(node) {
         serialize: false, hideOnZoom: false, getHeight: height,
     });
     widget.serialize = false;   // the player holds no value; keeps widgets_values to the real ones
+    keepNodeWidth(widget);      // the side panel must not shrink the player (luna_widget_width.mjs)
     widget.computeSize = (width) => [width, height()];
 }
 

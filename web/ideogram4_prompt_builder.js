@@ -1,4 +1,5 @@
 import { chainCallback, addMiddleClickPan, addWheelPassthrough, cursorForBboxMode, watchImageInputs, captureVideoFrame } from './utility.js';
+import { keepNodeWidth } from './luna_widget_width.mjs';
 const { app } = window.comfyAPI.app;
 
 const HANDLE = 8;            // hit radius (canvas px) for corners/edges
@@ -711,6 +712,7 @@ app.registerExtension({
         serialize: false, hideOnZoom: false,
         getMinHeight: () => (node._detached ? 0 : EDITOR_MIN),   // collapse when popped out
       });
+      keepNodeWidth(node.ideoEditor);   // the side panel must not shrink the editor (luna_widget_width.mjs)
       node.resizable = true;
 
       // DOM widgets are HTML layered over the canvas; ComfyUI only repositions/clips them

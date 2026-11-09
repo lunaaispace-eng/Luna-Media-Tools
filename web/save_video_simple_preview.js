@@ -5,6 +5,7 @@
 
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
+import { keepNodeWidth } from "./luna_widget_width.mjs";
 
 const NODE_NAME = "Luna-SaveVideo";
 
@@ -270,6 +271,7 @@ app.registerExtension({
                 hideOnZoom: false,
                 getHeight: () => previewHeight(),
             });
+            keepNodeWidth(previewWidget);   // the side panel must not shrink the player (luna_widget_width.mjs)
             previewWidget.aspectRatio = 16 / 9;
             previewWidget.computeSize = function (width) {
                 if (root.hidden) return [width, -4];
