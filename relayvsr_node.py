@@ -5,7 +5,7 @@ holds the whole upscaled video in RAM as float32 before it is saved: 15 s of 4K 
 the same computation and keeps only one keyframe window of 4K frames at a time:
 
 1. The keyframe pass: every 15th frame through the RelayVSR model, exactly as RelayVSR Conditioning plus a
-   KSampler (euler, simple, 1 step, cfg 1, denoise 1) do it.
+   KSampler (1 step, cfg 1, denoise 1, sampler and scheduler on the node: euler / simple by default) do it.
 2. The decode: the Flash decoder already rebuilds the frames one window (keyframe to keyframe) at a time and starts
    each window fresh from its two keyframe latents. Here each window is decoded on its own through the VAE's normal
    decode, and its frames go to FFmpeg at once. The pixels are the ones VSR Decode would make.
@@ -33,6 +33,18 @@ NODE_ID = "Luna-RelayVSR"
 _CONTAINERS = ["Auto", "WebM", "MKV", "MP4"]
 
 
+def _sampler_names():
+    import comfy.samplers
+
+    return comfy.samplers.KSampler.SAMPLERS
+
+
+def _scheduler_names():
+    import comfy.samplers
+
+    return comfy.samplers.KSampler.SCHEDULERS
+
+
 def _log(message):
     print(f"[{NODE_ID}] {message}")
 
@@ -58,8 +70,8 @@ def relay_windows(frame_count):
     return keyframes, windows
 
 
-def sample_keyframes(model, images, seed):
-    """The latent RelayVSR Conditioning + KSampler (euler, simple, 1 step, cfg 1, denoise 1) make."""
+def sample_keyframes(model, images, seed, sampler_name="euler", scheduler="simple"):
+    """The latent RelayVSR Conditioning + KSampler (1 step, cfg 1, denoise 1, the given sampler and scheduler) make."""
     import nodes as comfy_nodes
     from comfy.ldm.wan.model_vsr import relay_latent_size
 
@@ -72,7 +84,7 @@ def sample_keyframes(model, images, seed):
         device=comfy.model_management.intermediate_device(),
     )
     return comfy_nodes.common_ksampler(
-        model, seed, 1, 1.0, "euler", "simple", positive, positive, {"samples": latent}, denoise=1.0,
+        model, seed, 1, 1.0, sampler_name, scheduler, positive, positive, {"samples": latent}, denoise=1.0,
     )[0]["samples"]
 
 
@@ -142,6 +154,12 @@ class LunaRelayVSR:
                     "tooltip": "Auto uses Opus for WebM and AAC for MKV / MP4."}),
                 "audio_bitrate": (_AUDIO_BITRATE_OPTIONS, {"default": "192k",
                     "tooltip": "Audio quality. 192k is clean for music and speech."}),
+                # Appended last, so saved workflows keep their widget positions.
+                "sampler_name": (_sampler_names(), {"default": "euler",
+                    "tooltip": "Sampler of the one keyframe step, as the KSampler's sampler_name in the native graph "
+                               "(euler, or er_sde as in Peter's relayvsr_x2_video KJ)."}),
+                "scheduler": (_scheduler_names(), {"default": "simple",
+                    "tooltip": "Scheduler of the one keyframe step, as the KSampler's scheduler in the native graph."}),
             },
             "optional": {
                 "audio": ("AUDIO", {"tooltip": "The source sound, from Luna-LoadVideo.audio. Copied into the file."}),
@@ -161,8 +179,8 @@ class LunaRelayVSR:
 
     def upscale(
         self, images, model, vae, frame_rate, seed, detail, codec, container, bit_depth, quality, filename_prefix,
-        output_path, save_output, save_metadata, crop_to_audio, audio_codec, audio_bitrate, audio=None,
-        prompt=None, extra_pnginfo=None,
+        output_path, save_output, save_metadata, crop_to_audio, audio_codec, audio_bitrate, sampler_name="euler",
+        scheduler="simple", audio=None, prompt=None, extra_pnginfo=None,
     ):
         _, decoder = _check_inputs(images, model, vae)
         frame_count = images.shape[0]
@@ -172,7 +190,7 @@ class LunaRelayVSR:
         _log(f"{frame_count} frames {images.shape[2]}x{images.shape[1]} -> {width}x{height} (x{factor}), "
              f"{len(keyframes)} keyframes, {len(windows)} windows.")
 
-        samples = sample_keyframes(model, images, seed)
+        samples = sample_keyframes(model, images, seed, sampler_name, scheduler)
 
         selected_bit_depth = _selected_bit_depth(codec, bit_depth, images)
         progress = comfy.utils.ProgressBar(frame_count)
@@ -197,9 +215,11 @@ class LunaRelayVSR:
         video_path = saved["path"]
         ui = {}
         if saved["subfolder"] is not None:
-            ui = {"images": [{"filename": os.path.basename(video_path), "subfolder": saved["subfolder"],
-                              "type": saved["type"], "format": _MIME_TYPES[saved["container"]]}],
-                  "animated": (True,)}
+            # The same player data Luna-SaveVideo gives (web/save_video_simple_preview.js plays both).
+            video = {"filename": os.path.basename(video_path), "subfolder": saved["subfolder"], "type": saved["type"],
+                     "format": _MIME_TYPES[saved["container"]], "codec": saved["codec"], "bit_depth": selected_bit_depth,
+                     "container": saved["container"], "width": width, "height": height}
+            ui = {"images": [video], "gifs": [{**video, "fps": frame_rate}]}
         from comfy_api.latest import InputImpl
 
         return {"ui": ui, "result": (video_path, InputImpl.VideoFromFile(video_path))}

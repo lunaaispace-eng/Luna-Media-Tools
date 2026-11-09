@@ -8,6 +8,9 @@ import { api } from "../../scripts/api.js";
 import { keepNodeWidth } from "./luna_widget_width.mjs";
 
 const NODE_NAME = "Luna-SaveVideo";
+// Luna-RelayVSR writes its file the same way and gets the same player; it has no frame-export
+// widgets and uses the pack's own help, so it gets the player, Autoplay and Download only.
+const PLAYER_NODES = [NODE_NAME, "Luna-RelayVSR"];
 
 function videoUrl(video) {
     const params = new URLSearchParams({
@@ -103,13 +106,14 @@ function isHelpIconHit(node, pos) {
 app.registerExtension({
     name: "LunaMediaTools.VideoPreview",
     async beforeRegisterNodeDef(nodeType, nodeData) {
-        if (nodeData.name !== NODE_NAME) return;
+        if (!PLAYER_NODES.includes(nodeData.name)) return;
+        const isSaveVideo = nodeData.name === NODE_NAME;
 
         // output_path sits under filename_prefix, so positional widgets_values
         // from older saves would land one widget off. Naming the old order makes
         // the frontend restore by name: files without widgets_values_named map
         // through this list, files with it use their own names.
-        nodeData.fallbackWidgetsValuesNames = [
+        if (isSaveVideo) nodeData.fallbackWidgetsValuesNames = [
             "frame_rate", "codec", "container", "bit_depth", "quality", "log_level",
             "pingpong", "save_metadata", "filename_prefix", "save_output", "pass_frames",
             "crop_to_audio", "audio_codec", "audio_bitrate", "save_first_frame",
@@ -127,30 +131,32 @@ app.registerExtension({
             const originalOnDrawForeground = this.onDrawForeground;
             const originalOnMouseDown = this.onMouseDown;
 
-            this.onDrawForeground = function (ctx) {
-                originalOnDrawForeground?.apply(this, arguments);
-                const titleHeight = globalThis.LiteGraph?.NODE_TITLE_HEIGHT ?? 30;
-                const x = this.size[0] - 14;
-                const y = -titleHeight / 2;
-                ctx.save();
-                ctx.fillStyle = "#d9e8ff";
-                ctx.beginPath();
-                ctx.arc(x, y, 8, 0, Math.PI * 2);
-                ctx.fill();
-                ctx.fillStyle = "#1e293b";
-                ctx.font = "bold 12px sans-serif";
-                ctx.textAlign = "center";
-                ctx.textBaseline = "middle";
-                ctx.fillText("?", x, y + 0.5);
-                ctx.restore();
-            };
-            this.onMouseDown = function (event, pos) {
-                if (isHelpIconHit(this, pos)) {
-                    showHelpDialog();
-                    return true;
-                }
-                return originalOnMouseDown?.apply(this, arguments);
-            };
+            if (isSaveVideo) {
+                this.onDrawForeground = function (ctx) {
+                    originalOnDrawForeground?.apply(this, arguments);
+                    const titleHeight = globalThis.LiteGraph?.NODE_TITLE_HEIGHT ?? 30;
+                    const x = this.size[0] - 14;
+                    const y = -titleHeight / 2;
+                    ctx.save();
+                    ctx.fillStyle = "#d9e8ff";
+                    ctx.beginPath();
+                    ctx.arc(x, y, 8, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.fillStyle = "#1e293b";
+                    ctx.font = "bold 12px sans-serif";
+                    ctx.textAlign = "center";
+                    ctx.textBaseline = "middle";
+                    ctx.fillText("?", x, y + 0.5);
+                    ctx.restore();
+                };
+                this.onMouseDown = function (event, pos) {
+                    if (isHelpIconHit(this, pos)) {
+                        showHelpDialog();
+                        return true;
+                    }
+                    return originalOnMouseDown?.apply(this, arguments);
+                };
+            }
             const root = document.createElement("div");
             root.className = "lunasave-video-preview";
             root.style.width = "100%";
@@ -208,7 +214,8 @@ app.registerExtension({
             download.addEventListener("click", (event) => {
                 if (download.href.endsWith("#")) event.preventDefault();
             });
-            actions.append(saveFirstFrameLabel, saveLastFrameLabel, autoPlayLabel, download);
+            if (isSaveVideo) actions.append(saveFirstFrameLabel, saveLastFrameLabel);
+            actions.append(autoPlayLabel, download);
 
             preview.addEventListener("loadedmetadata", () => {
                 previewWidget.aspectRatio = preview.videoWidth / preview.videoHeight;

@@ -120,7 +120,7 @@ class NodeTests(unittest.TestCase):
     def test_node_writes_every_frame_at_the_model_size(self):
         decoder = tiny_decoder()
         images = clip(33)
-        relay.sample_keyframes = lambda model, imgs, seed: latent_for(imgs, decoder)
+        relay.sample_keyframes = lambda model, imgs, seed, sampler, scheduler: latent_for(imgs, decoder)
         vae = FakeVAE(decoder)
         result = relay.LunaRelayVSR().upscale(
             images, FakeModel(decoder.latent_stride), vae, 24.0, 0, 1.0, "H.264", "MP4", "8-bit", 18,
@@ -132,8 +132,24 @@ class NodeTests(unittest.TestCase):
         self.assertGreaterEqual(vae.calls, len(relay.relay_windows(33)[1]))
         written = self.frames_in(path)
         self.assertEqual(tuple(written.shape), (33, 64, 96, 3))
-        self.assertEqual(result["ui"]["animated"], (True,))
+        self.assertEqual(result["ui"]["gifs"][0]["filename"], os.path.basename(path))
+        self.assertEqual((result["ui"]["gifs"][0]["width"], result["ui"]["gifs"][0]["fps"]), (96, 24.0))
         del video, written
+
+    def test_sampler_and_scheduler_reach_the_keyframe_pass(self):
+        decoder = tiny_decoder()
+        seen = []
+        relay.sample_keyframes = lambda model, imgs, seed, sampler, scheduler: seen.append((sampler, scheduler)) or latent_for(imgs, decoder)
+        relay.LunaRelayVSR().upscale(
+            clip(16), FakeModel(decoder.latent_stride), FakeVAE(decoder), 24.0, 0, 1.0, "H.264", "MP4", "8-bit", 18,
+            "relay_sampler", "", True, False, False, "Auto", "192k", "er_sde", "simple",
+        )
+        self.assertEqual(seen, [("er_sde", "simple")])
+
+    def test_new_widgets_come_last(self):
+        names = list(relay.LunaRelayVSR.INPUT_TYPES()["required"])
+        self.assertEqual(names[-2:], ["sampler_name", "scheduler"])
+        self.assertIn("er_sde", relay.LunaRelayVSR.INPUT_TYPES()["required"]["sampler_name"][0])
 
     def test_wrong_model_is_refused(self):
         decoder = tiny_decoder()
