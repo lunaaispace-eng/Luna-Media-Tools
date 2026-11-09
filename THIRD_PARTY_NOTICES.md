@@ -9,6 +9,7 @@ from the projects below. Each header in the source files names what was changed.
 | ComfyUI-DaSiWa-Nodes, an earlier Apache-2.0 version | Apache-2.0 | Luna-SaveVideo (from `nodes_enhanced_video_combine.py`) and its preview script | `video_nodes.py`, `web/save_video_simple_preview.js` |
 | Load Video Pixaroma, in [ComfyUI-Pixaroma](https://github.com/pixaroma/ComfyUI-Pixaroma) (c) 2026 pixaroma | MIT | Luna-LoadVideo: the job, the seven outputs and their order, the player idea. Decoding and the rest are this pack's own | `load_video.py`, `web/luna_load_video.js` |
 | [ComfyUI](https://github.com/comfyanonymous/ComfyUI), comfyanonymous and contributors | GPL-3.0 | Luna-RelayVSR's keyframe pass repeats the native RelayVSR Conditioning node (`comfy_extras/nodes_wan.py`) and the KSampler call, and uses ComfyUI's RelayVSR model code (from [RelayVSR](https://github.com/kopperx/RelayVSR), Apache-2.0) at run time | `relayvsr_node.py` |
+| [ComfyUI-VideoHelperSuite](https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite), commit `4d907be` | GPL-3.0 | Luna-MetaBatch: the Meta Batch Manager (`videohelpersuite/nodes.py` BatchManager) and the re-queue (`videohelpersuite/utils.py` requeue_workflow) | `meta_batch.py` |
 | Ideogram 4 Prompt Builder in KJNodes, by Kijai | GPL-3.0 | Luna-Ideogram is a fork of it | `ideogram4_builder.py`, `web/ideogram4_prompt_builder.js`, `web/utility.js`, `fonts/FreeMono.ttf` |
 
 The RTX nodes drive NVIDIA RTX VFX (`nvvfx`), which is NVIDIA's software under its own

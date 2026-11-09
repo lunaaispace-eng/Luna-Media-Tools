@@ -17,12 +17,16 @@ Changes from the original, as Apache-2.0 section 4(b) requires them to be stated
     are not shown by ComfyUI) and added OUTPUT_TOOLTIPS
   - moved the encoding into `encode_video_file`, which takes the frames as a stream
     of raw bytes and is shared with Luna-RelayVSR
+  - added a `meta_batch` input (Luna-MetaBatch): one file written across queued runs,
+    the encoder picked by a one-frame probe, the sound added when the file closes
+  - added an optional `latent` input, saved beside the video as a safetensors .latent
 """
 
 import asyncio
 import datetime
 import json
 import os
+import queue
 import re
 import shutil
 import subprocess
@@ -40,6 +44,14 @@ try:
 except ImportError:
     web = None
     PromptServer = None
+try:
+    from comfy_execution.graph import ExecutionBlocker
+except ImportError:  # imported outside ComfyUI (tests)
+    class ExecutionBlocker:
+        def __init__(self, message):
+            self.message = message
+
+
 def log_luna(scope, message):
     print(f"[Luna-SaveVideo] {message}")
 
@@ -135,13 +147,19 @@ def detect_bit_depth(images):
     if not torch.is_floating_point(images):
         return 10 if images.element_size() >= 2 else 8
 
-    values = images.detach().to(device="cpu", dtype=torch.float32).flatten()
+    # Sample first, convert after: converting the whole batch to float32 first cost 108 GB for 1076 frames of
+    # 4K fp16 (2026-11-09). A contiguous batch gives the same strided sample as before, as a view.
+    values = images.detach()
     if values.numel() == 0:
         return 8
+    if not values.is_contiguous():
+        picks = torch.linspace(0, values.shape[0] - 1, min(values.shape[0], 8)).round().long().unique()
+        values = values[picks.to(values.device)]
+    values = values.reshape(-1)
     if values.numel() > 250_000:
         values = values[:: max(1, values.numel() // 250_000)]
 
-    values = values.clamp(0, 1)
+    values = values.to(device="cpu", dtype=torch.float32).clamp(0, 1)
     error_8 = torch.mean(torch.abs(values * 255 - torch.round(values * 255)))
     error_10 = torch.mean(torch.abs(values * 1023 - torch.round(values * 1023)))
     return 10 if error_10 < error_8 * 0.8 else 8
@@ -448,11 +466,15 @@ def _run_ffmpeg(command, frame_chunks, progress_callback=None):
 def _encode_with_available_encoder(
     ffmpeg, codec, bit_depth, width, height, frame_rate, frame_chunks, output_path,
     container, cq, crf, metadata_path, audio_path=None, audio_duration=None, crop_to_audio=False,
-    audio_codec="Auto", audio_bitrate="192k", progress_callback=None,
+    audio_codec="Auto", audio_bitrate="192k", progress_callback=None, encoder_names=None,
 ):
     available = _available_encoders(ffmpeg)
     attempts = []
-    for encoder in _ENCODER_NAMES[codec]:
+    candidates = _ENCODER_NAMES[codec]
+    if encoder_names:
+        # A meta-batch stream is pinned to the encoder its probe found; a fallback would restart the stream midway.
+        candidates = tuple(name for name in encoder_names if name in candidates)
+    for encoder in candidates:
         if encoder not in available:
             continue
         audio_encoders = _audio_encoder_candidates(audio_codec, container) if audio_path else (None,)
@@ -601,8 +623,16 @@ class SaveVideoSimple:
                 "prompt_text": ("STRING", {"forceInput": True,
                     "tooltip": "The final prompt, wired from whatever produced it (e.g. the LLM node). Written "
                                "word for word to the .txt when save_prompt is on."}),
+                "latent": ("LATENT", {"tooltip": "Optional: the sampler's latent of these frames (Luna-H3-Sampler.latent). "
+                    "Wired = saved beside the video as <name>.latent (with meta_batch: <name>_clip_NNNN.latent per run), "
+                    "the whole latent, to decode or upscale it later without sampling again. About 60 MB per 8 s H3 "
+                    "clip at 2 MP."}),
+                "meta_batch": ("VHS_BatchManager", {"tooltip": "Luna-MetaBatch.meta_batch: write ONE file across "
+                    "all the runs it queues (each Luna-H3-Chain clip). Every run adds its frames; the run after the "
+                    "last clip closes the file, adds the sound wired at that run (Luna-H3-ChainJoin gives the whole "
+                    "track then) and gives filename and video. Not with pingpong or Animated WebP / AVIF."}),
             },
-            "hidden": {"prompt": "PROMPT", "extra_pnginfo": "EXTRA_PNGINFO"},
+            "hidden": {"prompt": "PROMPT", "extra_pnginfo": "EXTRA_PNGINFO", "unique_id": "UNIQUE_ID"},
         }
 
     RETURN_TYPES = ("IMAGE", "STRING", "VIDEO")
@@ -632,10 +662,18 @@ class SaveVideoSimple:
         self, images, frame_rate, codec, container, bit_depth, quality, pingpong,
         save_metadata, filename_prefix, save_output, pass_frames, crop_to_audio=False, audio_codec="Auto",
         audio_bitrate="192k", log_level="Standard", save_first_frame=False, save_last_frame=False, save_prompt=True,
-        audio=None, prompt_text="", output_path="", prompt=None, extra_pnginfo=None,
+        audio=None, prompt_text="", output_path="", prompt=None, extra_pnginfo=None, meta_batch=None, unique_id=None,
+        latent=None,
     ):
         if images.ndim != 4 or images.shape[-1] < 3:
             raise ValueError("images must be an IMAGE batch shaped [frames, height, width, channels] with RGB channels.")
+        if meta_batch is not None:
+            return self._combine_batch(
+                images, meta_batch, unique_id, prompt, extra_pnginfo, frame_rate, codec, container, bit_depth, quality,
+                pingpong, save_metadata, filename_prefix, output_path, save_output, pass_frames, crop_to_audio,
+                audio_codec, audio_bitrate, save_first_frame, save_last_frame, save_prompt, audio, prompt_text,
+                latent,
+            )
 
         try:
             import comfy.utils
@@ -658,41 +696,284 @@ class SaveVideoSimple:
             selected_bit_depth, quality, save_metadata, filename_prefix, output_path, save_output, audio,
             crop_to_audio, audio_codec, audio_bitrate, prompt, extra_pnginfo, report_encode_progress,
         )
-        output_path, subfolder, output_type = saved["path"], saved["subfolder"], saved["type"]
-        selected_codec, selected_container, encoder = saved["codec"], saved["container"], saved["encoder"]
-
         output_frames = _pingpong_frames(images, pingpong) if pass_frames else images[:0]
         if progress_bar is not None:
             progress_bar.update_absolute(_encoded_frame_count(images, pingpong))
-        frame_exports = _save_frame_exports(images, output_path, save_first_frame, save_last_frame, pingpong)
-        prompt_sidecar = _write_prompt_sidecar(output_path, prompt_text) if save_prompt else None
-        animated_settings = _animated_image_settings(selected_container)
-        output_mime_type = _MIME_TYPES[selected_container]
-        assets = [{"filename": os.path.basename(output_path), "subfolder": subfolder, "type": output_type, "format": output_mime_type, "width": width, "height": height, "codec": selected_codec, "bit_depth": selected_bit_depth, "container": selected_container}]
-        assets.extend(
-            {"filename": os.path.basename(path), "subfolder": subfolder, "type": output_type, "format": "image/png", "width": width, "height": height}
-            for path in frame_exports
+        if latent is not None:
+            _save_latent(latent, os.path.splitext(saved["path"])[0] + ".latent")
+        return _saved_result(
+            saved, selected_bit_depth, width, height, frame_rate, images, pingpong, save_first_frame, save_last_frame,
+            save_prompt, prompt_text, output_frames,
         )
-        if subfolder is None:
-            # Saved outside the output folder: nothing the player may fetch.
-            assets = []
-            _log("Saved outside the ComfyUI output folder - no in-node preview.")
-        ui = {"images": assets}
-        if not animated_settings and subfolder is not None:
-            ui["gifs"] = [{"filename": os.path.basename(output_path), "subfolder": subfolder, "type": output_type, "format": output_mime_type, "codec": selected_codec, "bit_depth": selected_bit_depth, "container": selected_container, "width": width, "height": height, "fps": frame_rate}]
-        for path in frame_exports:
-            _log(f"Frame export: {path}.")
-        if prompt_sidecar:
-            _log(f"Prompt sidecar: {prompt_sidecar}.")
-        elif save_prompt:
-            _log("save_prompt is on but prompt_text is empty - no sidecar written.")
-        # Wrap the actual encoded file: includes audio, crop and ping-pong.
-        # Animated image formats are not native VIDEO containers.
-        saved_video = None
-        if not animated_settings:
-            from comfy_api.latest import InputImpl
-            saved_video = InputImpl.VideoFromFile(output_path)
-        return {"ui": ui, "result": (output_frames, output_path, saved_video)}
+
+    def _combine_batch(
+        self, images, meta_batch, unique_id, prompt, extra_pnginfo, frame_rate, codec, container, bit_depth, quality,
+        pingpong, save_metadata, filename_prefix, output_path, save_output, pass_frames, crop_to_audio, audio_codec,
+        audio_bitrate, save_first_frame, save_last_frame, save_prompt, audio, prompt_text, latent=None,
+    ):
+        """One run of a Luna-MetaBatch chain: this run's frames go into the file the first run opened.
+
+        The first run picks the encoder with a one-frame test and starts the encoder thread; every run feeds it; the
+        run after which the batch source has closed its inputs ends the file, adds the sound and returns the outputs.
+        """
+        from .meta_batch import requeue_workflow
+
+        _check_manager(prompt, unique_id)
+        if _animated_image_settings(container):
+            raise ValueError(f"[Luna-SaveVideo] {container} cannot be written across batches; pick a video container.")
+        if pingpong:
+            raise ValueError("[Luna-SaveVideo] pingpong cannot run across batches; turn it off with meta_batch.")
+        key = str(unique_id)
+        height, width = images.shape[1:3]
+        entry = meta_batch.outputs.get(key)
+        if entry is None:
+            depth = _selected_bit_depth(codec, bit_depth, images)
+            probe = _probe_encoder(images[:1], depth, frame_rate, codec, container, quality)
+            total = meta_batch.total_frames
+            stream = _MetaBatchStream(dict(
+                width=width, height=height, frame_count=int(total) if total != float("inf") else 0,
+                frame_rate=frame_rate, codec=probe["codec"], container=probe["container"], selected_bit_depth=depth,
+                quality=quality, save_metadata=save_metadata, filename_prefix=filename_prefix, output_path=output_path,
+                save_output=save_output, prompt=prompt, extra_pnginfo=extra_pnginfo, encoder_names=(probe["encoder"],),
+            ))
+            handle = _stream_handle(stream)
+            next(handle)
+            state = {"stream": stream, "depth": depth, "size": (height, width), "frames": 0, "runs": 0,
+                     "first": images[:1].clone() if save_first_frame else None}
+            meta_batch.outputs[key] = (state, handle)
+        else:
+            state, handle = entry
+            if (height, width) != state["size"]:
+                raise ValueError(f"[Luna-SaveVideo] this batch is {width}x{height}, the file is "
+                                 f"{state['size'][1]}x{state['size'][0]}; every batch must have the same size.")
+        for chunk in _iter_frame_byte_chunks(images, state["depth"], False):
+            state["stream"].put(chunk)
+        state["frames"] += images.shape[0]
+        if latent is not None:
+            stem = os.path.splitext(state["stream"].wait_for_path())[0]
+            _save_latent(latent, f"{stem}_clip_{state['runs']:04d}.latent")
+        state["runs"] += 1
+        output_frames = images if pass_frames else images[:0]
+        requeue_workflow((meta_batch.unique_id, not meta_batch.has_closed_inputs))
+        if not meta_batch.has_closed_inputs:
+            _log(f"Batch written: {state['frames']} frames so far.")
+            return {"ui": {"unfinished_batch": [True]},
+                    "result": (output_frames, ExecutionBlocker(None), ExecutionBlocker(None))}
+
+        meta_batch.outputs.pop(key, None)
+        saved = state["stream"].finish()
+        handle.close()
+        if len(meta_batch.outputs) == 0:
+            meta_batch.reset()
+        if audio is not None:
+            _mux_audio(saved["path"], audio, saved["container"], audio_codec, audio_bitrate, crop_to_audio)
+        ends = torch.cat([state["first"] if state["first"] is not None else images[:1], images[-1:]])
+        _log(f"Meta-batch file closed: {state['frames']} frames.")
+        return _saved_result(
+            saved, state["depth"], width, height, frame_rate, ends, False, save_first_frame, save_last_frame,
+            save_prompt, prompt_text, output_frames,
+        )
+
+
+def _saved_result(
+    saved, selected_bit_depth, width, height, frame_rate, frame_images, pingpong, save_first_frame, save_last_frame,
+    save_prompt, prompt_text, output_frames,
+):
+    """The node's ui and outputs for a finished file. `frame_images` holds at least the first and last frame."""
+    output_path, subfolder, output_type = saved["path"], saved["subfolder"], saved["type"]
+    selected_codec, selected_container = saved["codec"], saved["container"]
+    frame_exports = _save_frame_exports(frame_images, output_path, save_first_frame, save_last_frame, pingpong)
+    prompt_sidecar = _write_prompt_sidecar(output_path, prompt_text) if save_prompt else None
+    animated_settings = _animated_image_settings(selected_container)
+    output_mime_type = _MIME_TYPES[selected_container]
+    assets = [{"filename": os.path.basename(output_path), "subfolder": subfolder, "type": output_type, "format": output_mime_type, "width": width, "height": height, "codec": selected_codec, "bit_depth": selected_bit_depth, "container": selected_container}]
+    assets.extend(
+        {"filename": os.path.basename(path), "subfolder": subfolder, "type": output_type, "format": "image/png", "width": width, "height": height}
+        for path in frame_exports
+    )
+    if subfolder is None:
+        # Saved outside the output folder: nothing the player may fetch.
+        assets = []
+        _log("Saved outside the ComfyUI output folder - no in-node preview.")
+    ui = {"images": assets}
+    if not animated_settings and subfolder is not None:
+        ui["gifs"] = [{"filename": os.path.basename(output_path), "subfolder": subfolder, "type": output_type, "format": output_mime_type, "codec": selected_codec, "bit_depth": selected_bit_depth, "container": selected_container, "width": width, "height": height, "fps": frame_rate}]
+    for path in frame_exports:
+        _log(f"Frame export: {path}.")
+    if prompt_sidecar:
+        _log(f"Prompt sidecar: {prompt_sidecar}.")
+    elif save_prompt:
+        _log("save_prompt is on but prompt_text is empty - no sidecar written.")
+    # Wrap the actual encoded file: includes audio, crop and ping-pong.
+    # Animated image formats are not native VIDEO containers.
+    saved_video = None
+    if not animated_settings:
+        from comfy_api.latest import InputImpl
+        saved_video = InputImpl.VideoFromFile(output_path)
+    return {"ui": ui, "result": (output_frames, output_path, saved_video)}
+
+
+def _latent_tensors(latent):
+    """A LATENT's tensors by name: an H3 audio+video latent as video / audio (as Luna-H3-ChainRemember writes them)."""
+    samples = latent["samples"] if isinstance(latent, dict) else latent
+    if getattr(samples, "is_nested", False):
+        parts = samples.unbind()
+        if len(parts) == 2 and parts[0].ndim == 5:
+            names = ("video", "audio")
+        else:
+            names = tuple(f"part_{index}" for index in range(len(parts)))
+    else:
+        parts, names = (samples,), ("samples",)
+    return {name: part.detach().cpu().contiguous() for name, part in zip(names, parts)}
+
+
+def _save_latent(latent, path):
+    import safetensors.torch
+
+    safetensors.torch.save_file(_latent_tensors(latent), path,
+                                metadata={"format": "luna-latent-1", "saved_by": "Luna-SaveVideo"})
+    _log(f"Latent saved: {path}.")
+    return path
+
+
+def _check_manager(prompt, unique_id):
+    """Only Luna-MetaBatch counts Luna-SaveVideo when it decides to queue the next batch."""
+    from .meta_batch import MANAGER_IDS
+
+    link = ((prompt or {}).get(str(unique_id)) or {}).get("inputs", {}).get("meta_batch")
+    if isinstance(link, list) and (prompt.get(str(link[0])) or {}).get("class_type") not in MANAGER_IDS:
+        raise ValueError("[Luna-SaveVideo] meta_batch must come from Luna-MetaBatch. VHS's Meta Batch Manager does not "
+                         "count Luna-SaveVideo, so the next batch would never be queued.")
+
+
+def _probe_encoder(frame, depth, frame_rate, codec, container, quality):
+    """Pick codec, container and encoder once, by encoding one frame to the temp folder, so the real file never has to
+    restart halfway through a chain."""
+    saved = encode_video_file(
+        lambda: _iter_frame_byte_chunks(frame, depth, False), frame.shape[2], frame.shape[1], 1, frame_rate, codec,
+        container, depth, quality, False, "luna_metabatch_probe", "", False,
+    )
+    try:
+        os.remove(saved["path"])
+    except OSError:
+        pass
+    return saved
+
+
+_STREAM_END = object()
+
+
+class _MetaBatchStream:
+    """One file written across the runs of a Luna-MetaBatch chain: an encoder thread fed through a small queue."""
+
+    def __init__(self, encode_arguments):
+        self.queue = queue.Queue(maxsize=4)
+        self.result = None
+        self.error = None
+        self.path = None
+        self.path_ready = threading.Event()
+        encode_arguments = dict(encode_arguments, on_output_path=self._set_path)
+        self.thread = threading.Thread(target=self._run, args=(encode_arguments,), name="luna-metabatch-encode",
+                                       daemon=True)
+        self.thread.start()
+
+    def _chunks(self):
+        while True:
+            item = self.queue.get()
+            if item is _STREAM_END:
+                return
+            yield item
+
+    def _run(self, encode_arguments):
+        try:
+            self.result = encode_video_file(lambda: self._chunks(), **encode_arguments)
+        except BaseException as error:  # handed to the run that waits on it
+            self.error = error
+
+    def _set_path(self, path):
+        self.path = path
+        self.path_ready.set()
+
+    def wait_for_path(self):
+        """The file's path, known once the encoder has started on it."""
+        while not self.path_ready.wait(timeout=0.5):
+            if self.error is not None or not self.thread.is_alive():
+                raise RuntimeError(f"[Luna-SaveVideo] the encoder stopped: {self.error}")
+            _raise_if_interrupted()
+        return self.path
+
+    def put(self, chunk):
+        while True:
+            if self.error is not None or not self.thread.is_alive():
+                raise RuntimeError(f"[Luna-SaveVideo] the encoder stopped: {self.error}")
+            try:
+                self.queue.put(chunk, timeout=0.5)
+                return
+            except queue.Full:
+                _raise_if_interrupted()
+
+    def finish(self):
+        while self.thread.is_alive():
+            try:
+                self.queue.put(_STREAM_END, timeout=0.5)
+                break
+            except queue.Full:
+                continue
+        self.thread.join()
+        if self.error is not None:
+            raise RuntimeError(f"[Luna-SaveVideo] the encoder failed: {self.error}") from self.error
+        return self.result
+
+
+def _stream_handle(stream):
+    """What Luna-MetaBatch keeps for this output. Its reset (a stopped or restarted chain) closes the file."""
+    yield
+    try:
+        saved = stream.finish()
+        _log(f"Meta-batch stopped early; the file keeps the frames written so far: {saved['path']}.")
+    except Exception as error:
+        _log(f"Meta-batch stopped early and the file could not be closed: {error}")
+
+
+def _raise_if_interrupted():
+    try:
+        import comfy.model_management
+    except ImportError:
+        return
+    comfy.model_management.throw_exception_if_processing_interrupted()
+
+
+def _mux_audio(video_path, audio, container, audio_codec, audio_bitrate, crop_to_audio):
+    """Add the sound to a finished file without touching the picture (the last run brings the whole track)."""
+    ffmpeg = find_ffmpeg()
+    audio_path, audio_duration = _audio_file(audio)
+    stem, extension = os.path.splitext(video_path)
+    muxed = f"{stem}.mux{extension}"
+    attempts = []
+    try:
+        for encoder in _audio_encoder_candidates(audio_codec, container):
+            command = [
+                ffmpeg, "-y", "-v", "error", "-i", video_path,
+                "-f", "f32le", "-ar", str(audio_path[1]), "-ac", str(audio_path[2]), "-i", audio_path[0],
+                "-map", "0:v:0", "-map", "1:a:0", "-map_metadata", "0", "-c:v", "copy",
+                "-c:a", encoder, "-b:a", audio_bitrate,
+            ]
+            if crop_to_audio and audio_duration is not None:
+                command.extend(["-t", f"{audio_duration:.9f}"])
+            if container == "MP4":
+                command.extend(["-movflags", "+use_metadata_tags"])
+            result = subprocess.run(command + [muxed], capture_output=True, timeout=3600)
+            if result.returncode == 0:
+                os.replace(muxed, video_path)
+                _log(f"Sound added: {encoder}/{audio_bitrate}.")
+                return encoder
+            lines = result.stderr.decode(errors="replace").splitlines()
+            attempts.append(f"{encoder}: {lines[0][:180] if lines else 'unknown FFmpeg error'}")
+    finally:
+        os.unlink(audio_path[0])
+        if os.path.exists(muxed):
+            os.unlink(muxed)
+    raise RuntimeError("[Luna-SaveVideo] the sound could not be added: " + " | ".join(attempts))
 
 
 _MIME_TYPES = {
@@ -705,6 +986,7 @@ def encode_video_file(
     frame_chunks, width, height, frame_count, frame_rate, codec, container, selected_bit_depth, quality,
     save_metadata, filename_prefix, output_path, save_output, audio=None, crop_to_audio=False,
     audio_codec="Auto", audio_bitrate="192k", prompt=None, extra_pnginfo=None, report_encode_progress=None,
+    encoder_names=None, on_output_path=None,
 ):
     """Encode raw frames to a file: output folder, codec and container fallback, audio, metadata.
 
@@ -759,11 +1041,13 @@ def encode_video_file(
                         output_folder,
                         _output_filename(filename, counter, _CONTAINER_EXTENSIONS[selected_container]),
                     )
+                    if on_output_path is not None:
+                        on_output_path(output_path)
                     try:
                         encoder = _encode_with_available_encoder(
                             ffmpeg, selected_codec, selected_bit_depth, width, height, frame_rate, frame_chunks,
                             output_path, selected_container, quality, quality, metadata_path, audio_path, audio_duration, crop_to_audio,
-                            audio_codec, audio_bitrate, report_encode_progress,
+                            audio_codec, audio_bitrate, report_encode_progress, encoder_names,
                         )
                         break
                     except RuntimeError as error:
@@ -775,10 +1059,12 @@ def encode_video_file(
                 break
             else:
                 fallback_path = os.path.join(output_folder, _output_filename(filename, counter, ".mp4"))
+                if on_output_path is not None:
+                    on_output_path(fallback_path)
                 encoder = _encode_with_available_encoder(
                     ffmpeg, "H.264", selected_bit_depth, width, height, frame_rate, frame_chunks,
                     fallback_path, "MP4", quality, quality, metadata_path, audio_path, audio_duration, crop_to_audio,
-                    audio_codec, audio_bitrate, report_encode_progress,
+                    audio_codec, audio_bitrate, report_encode_progress, encoder_names,
                 )
                 output_path = fallback_path
                 selected_container = "MP4"

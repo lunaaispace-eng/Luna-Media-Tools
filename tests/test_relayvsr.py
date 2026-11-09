@@ -155,5 +155,37 @@ class NodeTests(unittest.TestCase):
         del video
 
 
+class BitDepthTests(unittest.TestCase):
+    """detect_bit_depth samples before it converts, so a long 4K batch costs no copy of itself."""
+
+    def old_detect(self, images):
+        values = images.detach().to(device="cpu", dtype=torch.float32).flatten()
+        if values.numel() > 250_000:
+            values = values[:: max(1, values.numel() // 250_000)]
+        values = values.clamp(0, 1)
+        error_8 = torch.mean(torch.abs(values * 255 - torch.round(values * 255)))
+        error_10 = torch.mean(torch.abs(values * 1023 - torch.round(values * 1023)))
+        return 10 if error_10 < error_8 * 0.8 else 8
+
+    def test_same_answer_as_before(self):
+        torch.manual_seed(3)
+        eight = torch.round(torch.rand(40, 64, 96, 3) * 255) / 255
+        ten = torch.round(torch.rand(40, 64, 96, 3) * 1023) / 1023
+        for images in (eight, ten, eight.half(), ten.to(torch.bfloat16), torch.rand(3, 8, 8, 3)):
+            self.assertEqual(video_nodes.detect_bit_depth(images), self.old_detect(images))
+
+    def test_huge_fp16_batch_is_not_copied(self):
+        # expand() gives a 4K fp16 batch of 1076 frames (about 54 GB) that takes no memory; converting it whole would.
+        frame = (torch.round(torch.rand(1, 2176, 3840, 3) * 1023) / 1023).half()
+        images = frame.expand(1076, -1, -1, -1)
+        self.assertEqual(video_nodes.detect_bit_depth(images), 10)
+        self.assertEqual(video_nodes.detect_bit_depth(images[:2].contiguous()), 10)
+
+    def test_empty_and_integer_batches(self):
+        self.assertEqual(video_nodes.detect_bit_depth(torch.zeros(0, 4, 4, 3)), 8)
+        self.assertEqual(video_nodes.detect_bit_depth(torch.zeros(2, 4, 4, 3, dtype=torch.uint8)), 8)
+        self.assertEqual(video_nodes.detect_bit_depth(torch.zeros(2, 4, 4, 3, dtype=torch.int16)), 10)
+
+
 if __name__ == "__main__":
     unittest.main()

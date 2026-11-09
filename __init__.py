@@ -1,8 +1,9 @@
 """Luna-Media-Tools — general image and video tools for ComfyUI.
 
-Eleven nodes, node id = display name, category "Luna-Media-Tools":
+Twelve nodes, node id = display name, category "Luna-Media-Tools":
   Luna-SaveImage, Luna-SaveVideo, Luna-LoadVideo, Luna-ImagePrecision, Luna-Degrid,
-  Luna-Ideogram, Luna-Watermark, Luna-StatusSwitch, Luna-RTXUpscaler, Luna-RTXFrameGen, Luna-RelayVSR.
+  Luna-Ideogram, Luna-Watermark, Luna-StatusSwitch, Luna-RTXUpscaler, Luna-RTXFrameGen, Luna-RelayVSR,
+  Luna-MetaBatch.
 
 All V1 mappings (Luna-Ideogram is a V3 class registered through the V1 mapping, as the
 standalone pack did). The frontend lives in one folder, web/.
@@ -26,6 +27,10 @@ from .degrid_nodes import (
     NODE_DISPLAY_NAME_MAPPINGS as _DEGRID_D,
 )
 from .ideogram4_builder import Ideogram4PromptBuilderLuna
+from .meta_batch import (
+    NODE_CLASS_MAPPINGS as _META_C,
+    NODE_DISPLAY_NAME_MAPPINGS as _META_D,
+)
 from .relayvsr_node import (
     NODE_CLASS_MAPPINGS as _RELAY_C,
     NODE_DISPLAY_NAME_MAPPINGS as _RELAY_D,
@@ -42,6 +47,7 @@ for _c, _d in (
     (_DEGRID_C, _DEGRID_D),
     (_TOOLS_C, _TOOLS_D),
     (_RELAY_C, _RELAY_D),
+    (_META_C, _META_D),
 ):
     NODE_CLASS_MAPPINGS.update(_c)
     NODE_DISPLAY_NAME_MAPPINGS.update(_d)

@@ -29,7 +29,7 @@ import { registerLunaCollapse } from "./luna_collapse.mjs";
 // input tooltips, so there is no separate help file to keep up to date.
 registerLunaHelp(app, [
     "Luna-LoadVideo", "Luna-SaveImage", "Luna-SaveVideo", "Luna-ImagePrecision", "Luna-Degrid",
-    "Luna-Ideogram", "Luna-Watermark", "Luna-StatusSwitch", "Luna-RTXUpscaler", "Luna-RTXFrameGen", "Luna-RelayVSR",
+    "Luna-Ideogram", "Luna-Watermark", "Luna-StatusSwitch", "Luna-RTXUpscaler", "Luna-RTXFrameGen", "Luna-RelayVSR", "Luna-MetaBatch",
 ], "LunaMediaTools.Help");
 
 // The chevron beside it folds the settings away, leaving sockets and whatever the
