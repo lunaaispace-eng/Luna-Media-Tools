@@ -15,6 +15,8 @@ Changes from the original, as Apache-2.0 section 4(b) requires them to be stated
   - added an optional `output_path` (empty / relative / absolute, as in Luna-SaveImage)
   - rewrote every input's help as a `tooltip` (the original's `description` keys
     are not shown by ComfyUI) and added OUTPUT_TOOLTIPS
+  - moved the encoding into `encode_video_file`, which takes the frames as a stream
+    of raw bytes and is shared with Luna-RelayVSR
 """
 
 import asyncio
@@ -649,84 +651,15 @@ class SaveVideoSimple:
         if progress_bar is not None:
             progress_bar.update_absolute(0)
         selected_bit_depth = _selected_bit_depth(codec, bit_depth, images)
-        output_dir = folder_paths.get_output_directory() if save_output else folder_paths.get_temp_directory()
-        output_type = "output" if save_output else "temp"
         height, width = images.shape[1:3]
-        filename_prefix = _format_filename_prefix(filename_prefix)
-        # output_path works as in Luna-SaveImage: empty = output (or temp) folder,
-        # relative = subfolder of it, absolute = exactly there. The prefix may
-        # still hold folders, as before, but only below the target directory.
-        save_dir = _format_filename_prefix(output_path or "").strip()
-        target_dir = output_dir
-        if save_dir:
-            target_dir = save_dir if os.path.isabs(save_dir) else os.path.join(output_dir, save_dir)
-        os.makedirs(target_dir, exist_ok=True)
-        output_folder, filename, counter, _, _ = folder_paths.get_save_image_path(filename_prefix, target_dir, width, height)
-        # The player can only fetch files inside the output/temp folder.
-        subfolder = _subfolder_under(output_folder, output_dir)
-        ffmpeg = find_ffmpeg()
-        if not ffmpeg:
-            raise RuntimeError("No FFmpeg executable was found. Install FFmpeg or imageio-ffmpeg for the mandatory H.264/MP4 fallback.")
-
-        metadata_path = _metadata_file(prompt, extra_pnginfo) if save_metadata else None
-        audio_path, audio_duration = _audio_file(audio)
         frame_chunks = lambda: _iter_frame_byte_chunks(images, selected_bit_depth, pingpong)
-        attempts = []
-        _log(
-            f"Encode {_encoded_frame_count(images, pingpong)}f {width}x{height}@{frame_rate:g}fps {selected_bit_depth}-bit; "
-            f"codec={codec}, container={container}, audio={'yes' if audio_path else 'no'}."
+        saved = encode_video_file(
+            frame_chunks, width, height, _encoded_frame_count(images, pingpong), frame_rate, codec, container,
+            selected_bit_depth, quality, save_metadata, filename_prefix, output_path, save_output, audio,
+            crop_to_audio, audio_codec, audio_bitrate, prompt, extra_pnginfo, report_encode_progress,
         )
-        try:
-            animated_settings = _animated_image_settings(container)
-            if animated_settings:
-                if audio_path:
-                    _log(f"{container} does not support audio; connected audio is omitted.")
-                output_path = os.path.join(output_folder, _output_filename(filename, counter, animated_settings[0]))
-                encoder = _encode_animated_image(
-                    ffmpeg, container, selected_bit_depth, width, height, frame_rate, frame_chunks, output_path, quality,
-                    report_encode_progress,
-                )
-                selected_container = container
-                selected_codec = container
-            else:
-                for selected_codec in _codec_candidates(codec):
-                    container_candidates = _auto_container_candidates(selected_codec, container) if codec == "Auto" else _container_candidates(selected_codec, container)
-                    for selected_container in container_candidates:
-                        if codec == "Auto":
-                            _log(f"Auto test: {selected_codec}/{selected_container}.")
-                        output_path = os.path.join(
-                            output_folder,
-                            _output_filename(filename, counter, _CONTAINER_EXTENSIONS[selected_container]),
-                        )
-                        try:
-                            encoder = _encode_with_available_encoder(
-                                ffmpeg, selected_codec, selected_bit_depth, width, height, frame_rate, frame_chunks,
-                                output_path, selected_container, quality, quality, metadata_path, audio_path, audio_duration, crop_to_audio,
-                                audio_codec, audio_bitrate, report_encode_progress,
-                            )
-                            break
-                        except RuntimeError as error:
-                            attempts.append(f"{selected_codec}/{selected_container}: {error}")
-                            if codec == "Auto":
-                                _log(f"Auto miss: {selected_codec}/{selected_container}; trying next.")
-                    else:
-                        continue
-                    break
-                else:
-                    fallback_path = os.path.join(output_folder, _output_filename(filename, counter, ".mp4"))
-                    encoder = _encode_with_available_encoder(
-                        ffmpeg, "H.264", selected_bit_depth, width, height, frame_rate, frame_chunks,
-                        fallback_path, "MP4", quality, quality, metadata_path, audio_path, audio_duration, crop_to_audio,
-                        audio_codec, audio_bitrate, report_encode_progress,
-                    )
-                    output_path = fallback_path
-                    selected_container = "MP4"
-                    selected_codec = "H.264"
-        finally:
-            if metadata_path:
-                os.unlink(metadata_path)
-            if audio_path:
-                os.unlink(audio_path[0])
+        output_path, subfolder, output_type = saved["path"], saved["subfolder"], saved["type"]
+        selected_codec, selected_container, encoder = saved["codec"], saved["container"], saved["encoder"]
 
         output_frames = _pingpong_frames(images, pingpong) if pass_frames else images[:0]
         if progress_bar is not None:
@@ -734,8 +667,7 @@ class SaveVideoSimple:
         frame_exports = _save_frame_exports(images, output_path, save_first_frame, save_last_frame, pingpong)
         prompt_sidecar = _write_prompt_sidecar(output_path, prompt_text) if save_prompt else None
         animated_settings = _animated_image_settings(selected_container)
-        mime_types = {"WebM": "video/webm", "MKV": "video/x-matroska", "MP4": "video/mp4", **{name: settings[2] for name, settings in _ANIMATED_IMAGE_SETTINGS.items()}}
-        output_mime_type = mime_types[selected_container]
+        output_mime_type = _MIME_TYPES[selected_container]
         assets = [{"filename": os.path.basename(output_path), "subfolder": subfolder, "type": output_type, "format": output_mime_type, "width": width, "height": height, "codec": selected_codec, "bit_depth": selected_bit_depth, "container": selected_container}]
         assets.extend(
             {"filename": os.path.basename(path), "subfolder": subfolder, "type": output_type, "format": "image/png", "width": width, "height": height}
@@ -748,7 +680,6 @@ class SaveVideoSimple:
         ui = {"images": assets}
         if not animated_settings and subfolder is not None:
             ui["gifs"] = [{"filename": os.path.basename(output_path), "subfolder": subfolder, "type": output_type, "format": output_mime_type, "codec": selected_codec, "bit_depth": selected_bit_depth, "container": selected_container, "width": width, "height": height, "fps": frame_rate}]
-        _log(f"Output: {output_path} ({selected_codec}, {encoder}, {selected_bit_depth}-bit).")
         for path in frame_exports:
             _log(f"Frame export: {path}.")
         if prompt_sidecar:
@@ -762,6 +693,105 @@ class SaveVideoSimple:
             from comfy_api.latest import InputImpl
             saved_video = InputImpl.VideoFromFile(output_path)
         return {"ui": ui, "result": (output_frames, output_path, saved_video)}
+
+
+_MIME_TYPES = {
+    "WebM": "video/webm", "MKV": "video/x-matroska", "MP4": "video/mp4",
+    **{name: settings[2] for name, settings in _ANIMATED_IMAGE_SETTINGS.items()},
+}
+
+
+def encode_video_file(
+    frame_chunks, width, height, frame_count, frame_rate, codec, container, selected_bit_depth, quality,
+    save_metadata, filename_prefix, output_path, save_output, audio=None, crop_to_audio=False,
+    audio_codec="Auto", audio_bitrate="192k", prompt=None, extra_pnginfo=None, report_encode_progress=None,
+):
+    """Encode raw frames to a file: output folder, codec and container fallback, audio, metadata.
+
+    `frame_chunks` is a callable returning an iterator of raw rgb24 (8-bit) or rgb48le (10-bit) bytes,
+    so the frames can be produced while FFmpeg encodes them and never sit in memory all at once.
+    A failed encoder attempt calls it again. Shared by Luna-SaveVideo and Luna-RelayVSR.
+    """
+    output_dir = folder_paths.get_output_directory() if save_output else folder_paths.get_temp_directory()
+    output_type = "output" if save_output else "temp"
+    filename_prefix = _format_filename_prefix(filename_prefix)
+    # output_path works as in Luna-SaveImage: empty = output (or temp) folder,
+    # relative = subfolder of it, absolute = exactly there. The prefix may
+    # still hold folders, as before, but only below the target directory.
+    save_dir = _format_filename_prefix(output_path or "").strip()
+    target_dir = output_dir
+    if save_dir:
+        target_dir = save_dir if os.path.isabs(save_dir) else os.path.join(output_dir, save_dir)
+    os.makedirs(target_dir, exist_ok=True)
+    output_folder, filename, counter, _, _ = folder_paths.get_save_image_path(filename_prefix, target_dir, width, height)
+    # The player can only fetch files inside the output/temp folder.
+    subfolder = _subfolder_under(output_folder, output_dir)
+    ffmpeg = find_ffmpeg()
+    if not ffmpeg:
+        raise RuntimeError("No FFmpeg executable was found. Install FFmpeg or imageio-ffmpeg for the mandatory H.264/MP4 fallback.")
+
+    metadata_path = _metadata_file(prompt, extra_pnginfo) if save_metadata else None
+    audio_path, audio_duration = _audio_file(audio)
+    attempts = []
+    _log(
+        f"Encode {frame_count}f {width}x{height}@{frame_rate:g}fps {selected_bit_depth}-bit; "
+        f"codec={codec}, container={container}, audio={'yes' if audio_path else 'no'}."
+    )
+    try:
+        animated_settings = _animated_image_settings(container)
+        if animated_settings:
+            if audio_path:
+                _log(f"{container} does not support audio; connected audio is omitted.")
+            output_path = os.path.join(output_folder, _output_filename(filename, counter, animated_settings[0]))
+            encoder = _encode_animated_image(
+                ffmpeg, container, selected_bit_depth, width, height, frame_rate, frame_chunks, output_path, quality,
+                report_encode_progress,
+            )
+            selected_container = container
+            selected_codec = container
+        else:
+            for selected_codec in _codec_candidates(codec):
+                container_candidates = _auto_container_candidates(selected_codec, container) if codec == "Auto" else _container_candidates(selected_codec, container)
+                for selected_container in container_candidates:
+                    if codec == "Auto":
+                        _log(f"Auto test: {selected_codec}/{selected_container}.")
+                    output_path = os.path.join(
+                        output_folder,
+                        _output_filename(filename, counter, _CONTAINER_EXTENSIONS[selected_container]),
+                    )
+                    try:
+                        encoder = _encode_with_available_encoder(
+                            ffmpeg, selected_codec, selected_bit_depth, width, height, frame_rate, frame_chunks,
+                            output_path, selected_container, quality, quality, metadata_path, audio_path, audio_duration, crop_to_audio,
+                            audio_codec, audio_bitrate, report_encode_progress,
+                        )
+                        break
+                    except RuntimeError as error:
+                        attempts.append(f"{selected_codec}/{selected_container}: {error}")
+                        if codec == "Auto":
+                            _log(f"Auto miss: {selected_codec}/{selected_container}; trying next.")
+                else:
+                    continue
+                break
+            else:
+                fallback_path = os.path.join(output_folder, _output_filename(filename, counter, ".mp4"))
+                encoder = _encode_with_available_encoder(
+                    ffmpeg, "H.264", selected_bit_depth, width, height, frame_rate, frame_chunks,
+                    fallback_path, "MP4", quality, quality, metadata_path, audio_path, audio_duration, crop_to_audio,
+                    audio_codec, audio_bitrate, report_encode_progress,
+                )
+                output_path = fallback_path
+                selected_container = "MP4"
+                selected_codec = "H.264"
+    finally:
+        if metadata_path:
+            os.unlink(metadata_path)
+        if audio_path:
+            os.unlink(audio_path[0])
+
+    _log(f"Output: {output_path} ({selected_codec}, {encoder}, {selected_bit_depth}-bit).")
+    return {"path": output_path, "subfolder": subfolder, "type": output_type,
+            "codec": selected_codec, "container": selected_container, "encoder": encoder}
 
 
 NODE_CLASS_MAPPINGS = {"Luna-SaveVideo": SaveVideoSimple}

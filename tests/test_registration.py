@@ -1,4 +1,4 @@
-"""The pack registers exactly its 10 nodes, node id = display name, one category,
+"""The pack registers exactly its 11 nodes, node id = display name, one category,
 and loads without NVIDIA RTX VFX (nvvfx) installed.
 
     E:/ComfyUI-Easy-Install/python_embeded/python.exe -m unittest discover -s tests -v
@@ -14,7 +14,7 @@ PACK = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 COMFY = os.environ.get("COMFYUI_DIR", r"E:\ComfyUI-Easy-Install\ComfyUI")
 
 IDS = ["Luna-SaveImage", "Luna-SaveVideo", "Luna-LoadVideo", "Luna-ImagePrecision", "Luna-Degrid",
-       "Luna-Ideogram", "Luna-Watermark", "Luna-StatusSwitch", "Luna-RTXUpscaler", "Luna-RTXFrameGen"]
+       "Luna-Ideogram", "Luna-Watermark", "Luna-StatusSwitch", "Luna-RTXUpscaler", "Luna-RTXFrameGen", "Luna-RelayVSR"]
 
 
 def load_pack():
@@ -40,7 +40,7 @@ class RegistrationTests(unittest.TestCase):
         sys.modules.pop("nvvfx", None)
         cls.pack = load_pack()
 
-    def test_ten_ids(self):
+    def test_eleven_ids(self):
         self.assertEqual(sorted(self.pack.NODE_CLASS_MAPPINGS), sorted(IDS))
 
     def test_id_is_display_name(self):

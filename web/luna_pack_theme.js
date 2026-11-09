@@ -29,14 +29,14 @@ import { registerLunaCollapse } from "./luna_collapse.mjs";
 // input tooltips, so there is no separate help file to keep up to date.
 registerLunaHelp(app, [
     "Luna-LoadVideo", "Luna-SaveImage", "Luna-SaveVideo", "Luna-ImagePrecision", "Luna-Degrid",
-    "Luna-Ideogram", "Luna-Watermark", "Luna-StatusSwitch", "Luna-RTXUpscaler", "Luna-RTXFrameGen",
+    "Luna-Ideogram", "Luna-Watermark", "Luna-StatusSwitch", "Luna-RTXUpscaler", "Luna-RTXFrameGen", "Luna-RelayVSR",
 ], "LunaMediaTools.Help");
 
 // The chevron beside it folds the settings away, leaving sockets and whatever the
 // node draws for itself — Luna-SaveImage keeps its preview, Luna-SaveVideo keeps the
 // player, the frame checkboxes, Autoplay and Download. Luna-Ideogram keeps its canvas editor,
-// Luna-RTXUpscaler and Luna-RTXFrameGen have only ordinary widgets, so folding leaves just the sockets.
+// Luna-RTXUpscaler, Luna-RTXFrameGen and Luna-RelayVSR have only ordinary widgets, so folding leaves just the sockets.
 registerLunaCollapse(app, [
     "Luna-SaveImage", "Luna-SaveVideo", "Luna-LoadVideo",
-    "Luna-Ideogram", "Luna-Watermark", "Luna-StatusSwitch", "Luna-RTXUpscaler", "Luna-RTXFrameGen",
+    "Luna-Ideogram", "Luna-Watermark", "Luna-StatusSwitch", "Luna-RTXUpscaler", "Luna-RTXFrameGen", "Luna-RelayVSR",
 ], "LunaMediaTools.Collapse");

@@ -1,9 +1,9 @@
 # Luna-Media-Tools
 
-General image and video tools for ComfyUI, ten nodes in one pack: save an image, save a video on the
+General image and video tools for ComfyUI, eleven nodes in one pack: save an image, save a video on the
 GPU, load a video with its sound, cast a batch to fp16, remove the VAE pixel grid, draw an Ideogram 4
-prompt on a canvas, overlay a watermark, switch other nodes on and off, upscale with NVIDIA RTX VFX, and add
-in-between frames with RTX frame generation.
+prompt on a canvas, overlay a watermark, switch other nodes on and off, upscale with NVIDIA RTX VFX, add
+in-between frames with RTX frame generation, and upscale a video with RelayVSR straight to a file.
 
 Every node's id is its display name, and every node sits in the category `Luna-Media-Tools`.
 Each node has an (i) help button on its title bar, and the big ones a chevron that folds the settings away.
@@ -40,6 +40,7 @@ python_embeded\python.exe -m pip install nvidia-vfx
 - **Luna-StatusSwitch**: Mutes or bypasses connected nodes from one on/off switch.
 - **Luna-RTXUpscaler**: RTX denoise, deblur and upscale, each with its own strength.
 - **Luna-RTXFrameGen**: Adds in-between frames with NVIDIA RTX frame generation.
+- **Luna-RelayVSR**: RelayVSR video upscale straight to a file, one window at a time, so 4K fits in RAM.
 
 ## Replaces
 
