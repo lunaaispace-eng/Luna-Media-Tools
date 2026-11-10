@@ -10,9 +10,15 @@ the same computation and keeps only one keyframe window of 4K frames at a time:
    each window fresh from its two keyframe latents. Here each window is decoded on its own through the VAE's normal
    decode, and its frames go to FFmpeg at once. The pixels are the ones VSR Decode would make.
 3. The file: Luna-SaveVideo's encoder (`video_nodes.encode_video_file`), with its codecs, audio and metadata.
+
+With `windows_ahead` above 0, a second thread decodes the next windows on the GPU while FFmpeg takes the current
+one, instead of the two waiting for each other. The frames and their order are the same.
 """
 
 import os
+import queue
+import threading
+import time
 
 import torch
 
@@ -104,6 +110,61 @@ def decode_windows(vae, samples, images, detail):
         yield pixels if index == 0 else pixels[1:]
 
 
+_DONE = object()
+
+
+class _Failed:
+    def __init__(self, error):
+        self.error = error
+
+
+def run_ahead(produce, depth):
+    """Yield what `produce()` yields, made in a thread that keeps up to `depth` items ready.
+
+    The thread decodes while the caller writes. A failure in the thread (an interrupt too) is raised in the caller.
+    Closing this generator stops the thread and waits for it, so two decodes never run at once.
+    """
+    items = queue.Queue(maxsize=depth)
+    stop = threading.Event()
+
+    def put(item):
+        while not stop.is_set():
+            try:
+                items.put(item, timeout=0.1)
+                return True
+            except queue.Full:
+                pass
+        return False
+
+    def worker():
+        produced = produce()
+        try:
+            # Inference mode is per thread; ComfyUI sets it only on the thread that runs the node.
+            with torch.inference_mode():
+                for item in produced:
+                    if not put(item):
+                        return
+            put(_DONE)
+        except BaseException as error:
+            put(_Failed(error))
+        finally:
+            produced.close()
+
+    thread = threading.Thread(target=worker, name="luna-relayvsr-decode", daemon=True)
+    thread.start()
+    try:
+        while True:
+            item = items.get()
+            if item is _DONE:
+                return
+            if isinstance(item, _Failed):
+                raise item.error
+            yield item
+    finally:
+        stop.set()
+        thread.join()
+
+
 class LunaRelayVSR:
     DESCRIPTION = (
         "RelayVSR video upscale in one node, written straight to a video file. Same models and same result as the "
@@ -160,6 +221,10 @@ class LunaRelayVSR:
                                "(euler, or er_sde as in Peter's relayvsr_x2_video KJ)."}),
                 "scheduler": (_scheduler_names(), {"default": "simple",
                     "tooltip": "Scheduler of the one keyframe step, as the KSampler's scheduler in the native graph."}),
+                "windows_ahead": ("INT", {"default": 2, "min": 0, "max": 8,
+                    "tooltip": "How many 15-frame windows the GPU may decode ahead while FFmpeg writes. 0 = the GPU "
+                               "and FFmpeg take turns (slower). Each window held costs about 0.4 GB of RAM at 4K "
+                               "8-bit (0.8 GB at 10-bit). Same frames at any value."}),
             },
             "optional": {
                 "audio": ("AUDIO", {"tooltip": "The source sound, from Luna-LoadVideo.audio. Copied into the file."}),
@@ -180,7 +245,7 @@ class LunaRelayVSR:
     def upscale(
         self, images, model, vae, frame_rate, seed, detail, codec, container, bit_depth, quality, filename_prefix,
         output_path, save_output, save_metadata, crop_to_audio, audio_codec, audio_bitrate, sampler_name="euler",
-        scheduler="simple", audio=None, prompt=None, extra_pnginfo=None,
+        scheduler="simple", windows_ahead=2, audio=None, prompt=None, extra_pnginfo=None,
     ):
         _, decoder = _check_inputs(images, model, vae)
         frame_count = images.shape[0]
@@ -195,23 +260,76 @@ class LunaRelayVSR:
         selected_bit_depth = _selected_bit_depth(codec, bit_depth, images)
         progress = comfy.utils.ProgressBar(frame_count)
         passes = []
+        open_pipelines = []
+        windows_ahead = max(0, int(windows_ahead))
+
+        def converted_windows(timing):
+            # One window's frames as FFmpeg bytes; the float32 pixels are freed before the window waits in the queue.
+            decoded = decode_windows(vae, samples, images, detail)
+            try:
+                while True:
+                    started = time.perf_counter()
+                    pixels = next(decoded, None)
+                    if pixels is None:
+                        return
+                    count = pixels.shape[0]
+                    chunks = list(_iter_frame_byte_chunks(pixels, selected_bit_depth, False))
+                    del pixels
+                    timing["decode"] += time.perf_counter() - started
+                    yield count, chunks
+            finally:
+                decoded.close()
 
         def frame_chunks():
             passes.append(1)
             if len(passes) > 1:
                 _log("That encoder failed; decoding again from the start for the next one.")
+            for pipeline in open_pipelines:
+                pipeline.close()
+            open_pipelines.clear()
+            timing = {"decode": 0.0, "wait": 0.0, "write": 0.0}
+            started = time.perf_counter()
             done = 0
-            for pixels in decode_windows(vae, samples, images, detail):
-                yield from _iter_frame_byte_chunks(pixels, selected_bit_depth, False)
-                done += pixels.shape[0]
-                progress.update_absolute(done, frame_count)
-                del pixels
+            if windows_ahead:
+                pipeline = run_ahead(lambda: converted_windows(timing), windows_ahead)
+                open_pipelines.append(pipeline)
+                while True:
+                    waited = time.perf_counter()
+                    item = next(pipeline, None)
+                    timing["wait"] += time.perf_counter() - waited
+                    if item is None:
+                        break
+                    count, chunks = item
+                    writing = time.perf_counter()
+                    for chunk in chunks:
+                        yield chunk
+                    timing["write"] += time.perf_counter() - writing
+                    del chunks
+                    done += count
+                    progress.update_absolute(done, frame_count)
+            else:
+                for pixels in decode_windows(vae, samples, images, detail):
+                    yield from _iter_frame_byte_chunks(pixels, selected_bit_depth, False)
+                    done += pixels.shape[0]
+                    progress.update_absolute(done, frame_count)
+                    del pixels
+            total = time.perf_counter() - started
+            if windows_ahead:
+                _log(f"Decode + write {total:.1f} s for {len(windows)} windows ({windows_ahead} ahead): GPU decode "
+                     f"{timing['decode']:.1f} s, FFmpeg write {timing['write']:.1f} s, waited for the GPU "
+                     f"{timing['wait']:.1f} s.")
+            else:
+                _log(f"Decode + write {total:.1f} s for {len(windows)} windows, GPU and FFmpeg in turn.")
 
-        saved = encode_video_file(
-            frame_chunks, width, height, frame_count, frame_rate, codec, container, selected_bit_depth, quality,
-            save_metadata, filename_prefix, output_path, save_output, audio, crop_to_audio, audio_codec,
-            audio_bitrate, prompt, extra_pnginfo,
-        )
+        try:
+            saved = encode_video_file(
+                frame_chunks, width, height, frame_count, frame_rate, codec, container, selected_bit_depth, quality,
+                save_metadata, filename_prefix, output_path, save_output, audio, crop_to_audio, audio_codec,
+                audio_bitrate, prompt, extra_pnginfo,
+            )
+        finally:
+            for pipeline in open_pipelines:
+                pipeline.close()
         video_path = saved["path"]
         ui = {}
         if saved["subfolder"] is not None:

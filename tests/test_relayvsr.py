@@ -8,6 +8,7 @@ weights: no model files, no ComfyUI server.
 import os
 import sys
 import tempfile
+import threading
 import unittest
 
 import torch
@@ -148,7 +149,8 @@ class NodeTests(unittest.TestCase):
 
     def test_new_widgets_come_last(self):
         names = list(relay.LunaRelayVSR.INPUT_TYPES()["required"])
-        self.assertEqual(names[-2:], ["sampler_name", "scheduler"])
+        self.assertEqual(names[-3:], ["sampler_name", "scheduler", "windows_ahead"])
+        self.assertEqual(relay.LunaRelayVSR.INPUT_TYPES()["required"]["windows_ahead"][1]["default"], 2)
         self.assertIn("er_sde", relay.LunaRelayVSR.INPUT_TYPES()["required"]["sampler_name"][0])
 
     def test_wrong_model_is_refused(self):
@@ -169,6 +171,82 @@ class NodeTests(unittest.TestCase):
         self.assertEqual(tuple(self.frames_in(path).shape), (9, 64, 64, 3))
         self.assertTrue(result["ui"]["gifs"])
         del video
+
+
+class WindowsAheadTests(unittest.TestCase):
+    """windows_ahead overlaps the GPU decode with the FFmpeg write; the bytes FFmpeg receives must not change."""
+
+    def setUp(self):
+        self.old_sample = relay.sample_keyframes
+        self.old_encode = relay.encode_video_file
+
+    def tearDown(self):
+        relay.sample_keyframes = self.old_sample
+        relay.encode_video_file = self.old_encode
+
+    def fed_bytes(self, windows_ahead, frames=46, retry_after=None, bit_depth="8-bit"):
+        """Every byte the node hands the encoder. retry_after = chunks read before a failed encoder gives up."""
+        decoder = tiny_decoder()
+        relay.sample_keyframes = lambda model, imgs, seed, sampler, scheduler: latent_for(imgs, decoder)
+        fed = []
+
+        def fake_encode(frame_chunks, *args, **kwargs):
+            if retry_after is not None:
+                attempt = frame_chunks()
+                for _ in range(retry_after):
+                    next(attempt)
+                attempt.close()
+            fed.append(b"".join(frame_chunks()))
+            return {"path": os.path.join(tempfile.gettempdir(), "relay_fake.mp4"), "subfolder": None}
+
+        relay.encode_video_file = fake_encode
+        relay.LunaRelayVSR().upscale(
+            clip(frames), FakeModel(decoder.latent_stride), FakeVAE(decoder), 24.0, 0, 1.0, "H.264", "MP4",
+            bit_depth, 18, "x", "", True, False, False, "Auto", "192k", "euler", "simple", windows_ahead,
+        )
+        return fed[0]
+
+    def test_same_bytes_at_any_depth(self):
+        serial = self.fed_bytes(0)
+        self.assertEqual(len(serial), 46 * 64 * 96 * 3)
+        for depth in (1, 2, 8):
+            self.assertEqual(self.fed_bytes(depth), serial, depth)
+        self.assertEqual(self.fed_bytes(2, bit_depth="10-bit"), self.fed_bytes(0, bit_depth="10-bit"))
+
+    def test_failed_encoder_restarts_from_the_first_frame(self):
+        self.assertEqual(self.fed_bytes(2, retry_after=1), self.fed_bytes(0))
+        self.assertFalse([t for t in threading.enumerate() if t.name == "luna-relayvsr-decode"])
+
+    def test_error_in_the_decode_thread_reaches_the_node(self):
+        def produce():
+            yield 1
+            raise RuntimeError("decode failed")
+
+        got = []
+        with self.assertRaisesRegex(RuntimeError, "decode failed"):
+            for item in relay.run_ahead(produce, 2):
+                got.append(item)
+        self.assertEqual(got, [1])
+
+    def test_closing_stops_the_decode_thread(self):
+        made = []
+
+        def produce():
+            for index in range(100):
+                made.append(index)
+                yield index
+
+        pipeline = relay.run_ahead(produce, 2)
+        self.assertEqual(next(pipeline), 0)
+        pipeline.close()
+        self.assertFalse([t for t in threading.enumerate() if t.name == "luna-relayvsr-decode"])
+        self.assertLessEqual(len(made), 5)
+
+    def test_decode_thread_runs_in_inference_mode(self):
+        def produce():
+            yield torch.is_inference_mode_enabled()
+
+        self.assertEqual(list(relay.run_ahead(produce, 1)), [True])
 
 
 class BitDepthTests(unittest.TestCase):
