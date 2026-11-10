@@ -37,12 +37,25 @@ class FakeVAE:
 
     def __init__(self, decoder):
         self.first_stage_model = decoder
+        self.device = torch.device("cpu")
+        self.vae_dtype = torch.float32
         self.calls = 0
+        self.prepared = 0
 
     def decode(self, samples, vae_options={}):
         self.calls += 1
         with torch.no_grad():
             return self.first_stage_model.decode(samples, **vae_options).movedim(1, -1)
+
+    def vae_output_dtype(self):
+        return torch.float32
+
+    def memory_used_decode(self, shape, dtype):
+        return 1
+
+    def prepare_decode(self, shape, memory_required=None):
+        self.prepared += 1
+        return 1
 
 
 class FakeModel:
@@ -130,7 +143,7 @@ class NodeTests(unittest.TestCase):
         path, video = result["result"]
         self.assertTrue(os.path.isfile(path))
         # an encoder FFmpeg lists but cannot open costs one decoded window before the next one is tried
-        self.assertGreaterEqual(vae.calls, len(relay.relay_windows(33)[1]))
+        self.assertGreaterEqual(vae.prepared, len(relay.relay_windows(33)[1]))
         written = self.frames_in(path)
         self.assertEqual(tuple(written.shape), (33, 64, 96, 3))
         self.assertEqual(result["ui"]["gifs"][0]["filename"], os.path.basename(path))
@@ -205,6 +218,26 @@ class WindowsAheadTests(unittest.TestCase):
             bit_depth, 18, "x", "", True, False, False, "Auto", "192k", "euler", "simple", windows_ahead,
         )
         return fed[0]
+
+    def test_device_bytes_equal_the_native_decode_bytes(self):
+        # the GPU path (decode into a device buffer, convert there) must hand FFmpeg exactly what
+        # VSR Decode's frames through Luna-SaveVideo's converter would
+        decoder = tiny_decoder()
+        for frames in (1, 2, 16, 17, 33, 46):
+            images = clip(frames)
+            samples = latent_for(images, decoder)
+            for bit_depth in (8, 10):
+                native = b"".join(
+                    chunk
+                    for pixels in relay.decode_windows(FakeVAE(decoder), samples, images, 0.8)
+                    for chunk in video_nodes._iter_frame_byte_chunks(pixels, bit_depth, False)
+                )
+                device = b"".join(
+                    bytes(chunk)
+                    for _, packed in relay.decode_windows_to_bytes(FakeVAE(decoder), samples, images, 0.8, bit_depth)
+                    for chunk in relay.byte_chunks(packed)
+                )
+                self.assertEqual(device, native, (frames, bit_depth))
 
     def test_same_bytes_at_any_depth(self):
         serial = self.fed_bytes(0)

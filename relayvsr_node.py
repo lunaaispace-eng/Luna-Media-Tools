@@ -30,7 +30,6 @@ from .video_nodes import (
     _AUDIO_CODEC_OPTIONS,
     _CODEC_OPTIONS,
     _MIME_TYPES,
-    _iter_frame_byte_chunks,
     _selected_bit_depth,
     encode_video_file,
 )
@@ -108,6 +107,61 @@ def decode_windows(vae, samples, images, detail):
         pixels = vae.decode(span, vae_options={"lq_images": images[first:last + 1], "detail": detail})
         pixels = pixels.reshape(-1, *pixels.shape[-3:])
         yield pixels if index == 0 else pixels[1:]
+
+
+def window_bytes_on_device(pixels, bit_depth):
+    """[frames, H, W, 3] pixels -> FFmpeg's raw rgb24 / rgb48le bytes as a CPU uint8 tensor.
+
+    The same arithmetic as Luna-SaveVideo's `_frame_bytes`, done where the pixels are (the GPU), so only the 8-bit
+    (or 16-bit) result crosses to the CPU instead of float32. Works in place on `pixels`.
+    """
+    frames = pixels[..., :3].float().clamp_(0, 1)
+    if bit_depth == 10:
+        values = frames.mul_(1023).round_().to(torch.int32).mul_(64)
+        # little-endian uint16, as numpy writes it on this machine
+        packed = torch.stack(((values & 255).to(torch.uint8), (values >> 8).to(torch.uint8)), dim=-1)
+    else:
+        packed = frames.mul_(255).round_().to(torch.uint8)
+    return packed.contiguous().cpu()
+
+
+def decode_windows_to_bytes(vae, samples, images, detail, bit_depth):
+    """Yield (frame count, CPU uint8 bytes tensor) per window, in order, each frame once.
+
+    The Flash decoder runs exactly as VSR Decode runs it (same latent, frames, dtype, detail), but writes into a
+    buffer on the GPU instead of ComfyUI's CPU float32 output; the 8/10-bit conversion happens there too.
+    """
+    decoder = vae.first_stage_model
+    keyframes, windows = relay_windows(images.shape[0])
+    out_dtype = vae.vae_output_dtype()
+    out_size = torch.empty((), dtype=out_dtype).element_size()
+    for index, (first, last) in enumerate(windows):
+        comfy.model_management.throw_exception_if_processing_interrupted()
+        span = samples[:, :, index:index + 2] if len(keyframes) > 1 else samples[:, :, :1]
+        lq_images = images[first:last + 1]
+        shape = decoder.decode_output_shape(span.shape, lq_images)
+        # the decoder's own need, plus the output buffer and its conversion living on the GPU
+        vae.prepare_decode(span.shape, vae.memory_used_decode(span.shape, vae.vae_dtype) + 2 * torch.Size(shape).numel() * out_size)
+        with comfy.model_management.cuda_device_context(vae.device):
+            out = torch.empty(shape, device=vae.device, dtype=out_dtype)
+            decoder.decode(span.to(device=vae.device, dtype=vae.vae_dtype), lq_images=lq_images, output_buffer=out,
+                           detail=detail)
+            pixels = out.movedim(1, -1).reshape(-1, *out.shape[-2:], out.shape[1])
+            if index:
+                pixels = pixels[1:]
+            count = pixels.shape[0]
+            packed = window_bytes_on_device(pixels, bit_depth)
+            del out, pixels
+        yield count, packed
+
+
+def byte_chunks(packed, max_chunk_bytes=64 * 1024 * 1024):
+    """A window's bytes tensor as FFmpeg pipe chunks, without copying."""
+    frame_bytes = packed[0].numel() if packed.shape[0] else 1
+    step = max(1, max_chunk_bytes // frame_bytes)
+    array = packed.numpy()
+    for start in range(0, packed.shape[0], step):
+        yield memoryview(array[start:start + step]).cast("B")
 
 
 _DONE = object()
@@ -263,20 +317,17 @@ class LunaRelayVSR:
         open_pipelines = []
         windows_ahead = max(0, int(windows_ahead))
 
-        def converted_windows(timing):
-            # One window's frames as FFmpeg bytes; the float32 pixels are freed before the window waits in the queue.
-            decoded = decode_windows(vae, samples, images, detail)
+        def timed_windows(timing):
+            # One window at a time: decoded and converted to bytes on the GPU, then only the bytes come to the CPU.
+            decoded = decode_windows_to_bytes(vae, samples, images, detail, selected_bit_depth)
             try:
                 while True:
                     started = time.perf_counter()
-                    pixels = next(decoded, None)
-                    if pixels is None:
-                        return
-                    count = pixels.shape[0]
-                    chunks = list(_iter_frame_byte_chunks(pixels, selected_bit_depth, False))
-                    del pixels
+                    item = next(decoded, None)
                     timing["decode"] += time.perf_counter() - started
-                    yield count, chunks
+                    if item is None:
+                        return
+                    yield item
             finally:
                 decoded.close()
 
@@ -291,35 +342,27 @@ class LunaRelayVSR:
             started = time.perf_counter()
             done = 0
             if windows_ahead:
-                pipeline = run_ahead(lambda: converted_windows(timing), windows_ahead)
-                open_pipelines.append(pipeline)
-                while True:
-                    waited = time.perf_counter()
-                    item = next(pipeline, None)
-                    timing["wait"] += time.perf_counter() - waited
-                    if item is None:
-                        break
-                    count, chunks = item
-                    writing = time.perf_counter()
-                    for chunk in chunks:
-                        yield chunk
-                    timing["write"] += time.perf_counter() - writing
-                    del chunks
-                    done += count
-                    progress.update_absolute(done, frame_count)
+                pipeline = run_ahead(lambda: timed_windows(timing), windows_ahead)
             else:
-                for pixels in decode_windows(vae, samples, images, detail):
-                    yield from _iter_frame_byte_chunks(pixels, selected_bit_depth, False)
-                    done += pixels.shape[0]
-                    progress.update_absolute(done, frame_count)
-                    del pixels
+                pipeline = timed_windows(timing)
+            open_pipelines.append(pipeline)
+            while True:
+                waited = time.perf_counter()
+                item = next(pipeline, None)
+                timing["wait"] += time.perf_counter() - waited
+                if item is None:
+                    break
+                count, packed = item
+                writing = time.perf_counter()
+                yield from byte_chunks(packed)
+                timing["write"] += time.perf_counter() - writing
+                del packed, item
+                done += count
+                progress.update_absolute(done, frame_count)
             total = time.perf_counter() - started
-            if windows_ahead:
-                _log(f"Decode + write {total:.1f} s for {len(windows)} windows ({windows_ahead} ahead): GPU decode "
-                     f"{timing['decode']:.1f} s, FFmpeg write {timing['write']:.1f} s, waited for the GPU "
-                     f"{timing['wait']:.1f} s.")
-            else:
-                _log(f"Decode + write {total:.1f} s for {len(windows)} windows, GPU and FFmpeg in turn.")
+            mode = f"{windows_ahead} ahead" if windows_ahead else "GPU and FFmpeg in turn"
+            _log(f"Decode + write {total:.1f} s for {len(windows)} windows ({mode}): GPU decode {timing['decode']:.1f} s, "
+                 f"FFmpeg write {timing['write']:.1f} s, waited for the GPU {timing['wait']:.1f} s.")
 
         try:
             saved = encode_video_file(
