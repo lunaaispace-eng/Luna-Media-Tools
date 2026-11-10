@@ -276,9 +276,10 @@ class LunaRelayVSR:
                 "scheduler": (_scheduler_names(), {"default": "simple",
                     "tooltip": "Scheduler of the one keyframe step, as the KSampler's scheduler in the native graph."}),
                 "windows_ahead": ("INT", {"default": 2, "min": 0, "max": 8,
-                    "tooltip": "How many 15-frame windows the GPU may decode ahead while FFmpeg writes. 0 = the GPU "
-                               "and FFmpeg take turns (slower). Each window held costs about 0.4 GB of RAM at 4K "
-                               "8-bit (0.8 GB at 10-bit). Same frames at any value."}),
+                    "tooltip": "How many 15-frame windows the GPU may decode ahead while FFmpeg writes. Leave it at 2, "
+                               "for any video length. 0 = the GPU and FFmpeg take turns: use it only if RAM is tight. "
+                               "3-8 are not faster, they only hold more RAM: about 0.4 GB per window at 4K 8-bit "
+                               "(0.8 GB at 10-bit). Same frames at any value."}),
             },
             "optional": {
                 "audio": ("AUDIO", {"tooltip": "The source sound, from Luna-LoadVideo.audio. Copied into the file."}),
