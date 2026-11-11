@@ -30,6 +30,8 @@ from .video_nodes import (
     _AUDIO_CODEC_OPTIONS,
     _CODEC_OPTIONS,
     _MIME_TYPES,
+    COLOR_OPTIONS,
+    COLOR_TOOLTIP,
     _selected_bit_depth,
     encode_video_file,
 )
@@ -283,6 +285,8 @@ class LunaRelayVSR:
             },
             "optional": {
                 "audio": ("AUDIO", {"tooltip": "The source sound, from Luna-LoadVideo.audio. Copied into the file."}),
+                # Last, so saved workflows keep their widget positions (Peter, 2026-11-11: HDR save).
+                "color": (COLOR_OPTIONS, {"default": "SDR", "tooltip": COLOR_TOOLTIP}),
             },
             "hidden": {"prompt": "PROMPT", "extra_pnginfo": "EXTRA_PNGINFO"},
         }
@@ -300,7 +304,7 @@ class LunaRelayVSR:
     def upscale(
         self, images, model, vae, frame_rate, seed, detail, codec, container, bit_depth, quality, filename_prefix,
         output_path, save_output, save_metadata, crop_to_audio, audio_codec, audio_bitrate, sampler_name="euler",
-        scheduler="simple", windows_ahead=2, audio=None, prompt=None, extra_pnginfo=None,
+        scheduler="simple", windows_ahead=2, audio=None, prompt=None, extra_pnginfo=None, color="SDR",
     ):
         _, decoder = _check_inputs(images, model, vae)
         frame_count = images.shape[0]
@@ -312,7 +316,7 @@ class LunaRelayVSR:
 
         samples = sample_keyframes(model, images, seed, sampler_name, scheduler)
 
-        selected_bit_depth = _selected_bit_depth(codec, bit_depth, images)
+        selected_bit_depth = _selected_bit_depth(codec, bit_depth, images, color)
         progress = comfy.utils.ProgressBar(frame_count)
         passes = []
         open_pipelines = []
@@ -369,7 +373,7 @@ class LunaRelayVSR:
             saved = encode_video_file(
                 frame_chunks, width, height, frame_count, frame_rate, codec, container, selected_bit_depth, quality,
                 save_metadata, filename_prefix, output_path, save_output, audio, crop_to_audio, audio_codec,
-                audio_bitrate, prompt, extra_pnginfo,
+                audio_bitrate, prompt, extra_pnginfo, color=color,
             )
         finally:
             for pipeline in open_pipelines:

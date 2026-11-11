@@ -185,7 +185,43 @@ def _codec_candidates(codec):
     return ("AV1", "VP9", "H.264") if codec == "Auto" else (codec,)
 
 
-def _selected_bit_depth(codec, bit_depth, images):
+# HDR save (Peter, 2026-11-11: "do it"). The frames arrive already HDR-coded, e.g. from RTX Video HDR ("HDR" = BT.2020
+# with HLG, "HDR PQ" = BT.2020 with PQ). The file gets 10-bit, the BT.2020 conversion matrix and the HDR tags, so an HDR
+# screen shows it as HDR. SDR writes exactly what it wrote before (no tags).
+COLOR_OPTIONS = ["SDR", "HDR HLG (BT.2020)", "HDR PQ (BT.2020)"]
+_HDR_TRANSFER = {"HDR HLG (BT.2020)": "arib-std-b67", "HDR PQ (BT.2020)": "smpte2084"}
+COLOR_TOOLTIP = (
+    "SDR: a normal video, as before. HDR HLG / HDR PQ: for frames that are already HDR, e.g. from RTX Video HDR "
+    "(its output_colorspace HDR = HLG, HDR PQ = PQ; pick the same here). The file is written 10-bit H.265 (AV1 in WebM) "
+    "with the BT.2020 HDR tags, so an HDR screen shows it as HDR. Codec and bit_depth are set for you.")
+
+
+def is_hdr(color):
+    return color in _HDR_TRANSFER
+
+
+def _color_arguments(color):
+    """FFmpeg output options for `color`: the RGB to YUV matrix and the tags. Empty for SDR."""
+    transfer = _HDR_TRANSFER.get(color)
+    if transfer is None:
+        return []
+    # The frames carry the tags (setparams) as well as the output options: FFmpeg takes the frames' own colour
+    # properties over -color_* when the filter chain sets any (MEASURED 2026-11-11: matrix only, primaries/trc lost).
+    return ["-vf", "scale=out_color_matrix=bt2020:out_range=tv,format=yuv420p10le,"
+                   f"setparams=range=tv:colorspace=bt2020nc:color_primaries=bt2020:color_trc={transfer}",
+            "-colorspace", "bt2020nc", "-color_primaries", "bt2020", "-color_trc", transfer, "-color_range", "tv"]
+
+
+def _hdr_codec(codec, container):
+    """HDR needs 10-bit H.265 or AV1: AV1 stays, a WebM container takes AV1, anything else becomes H.265."""
+    if codec == "AV1" or container == "WebM":
+        return "AV1"
+    return "H.265 (HEVC)"
+
+
+def _selected_bit_depth(codec, bit_depth, images, color="SDR"):
+    if is_hdr(color):
+        return 10
     requested_bit_depth = {"8-bit": 8, "10-bit": 10}.get(bit_depth)
     if requested_bit_depth is not None:
         return requested_bit_depth
@@ -466,7 +502,7 @@ def _run_ffmpeg(command, frame_chunks, progress_callback=None):
 def _encode_with_available_encoder(
     ffmpeg, codec, bit_depth, width, height, frame_rate, frame_chunks, output_path,
     container, cq, crf, metadata_path, audio_path=None, audio_duration=None, crop_to_audio=False,
-    audio_codec="Auto", audio_bitrate="192k", progress_callback=None, encoder_names=None,
+    audio_codec="Auto", audio_bitrate="192k", progress_callback=None, encoder_names=None, color="SDR",
 ):
     available = _available_encoders(ffmpeg)
     attempts = []
@@ -496,6 +532,7 @@ def _encode_with_available_encoder(
             if audio_path:
                 command.extend(["-map", f"{video_input_index + 1}:a:0", "-c:a", selected_audio_encoder, "-b:a", audio_bitrate])
             command.extend(_encoder_arguments(codec, encoder, bit_depth, cq, crf))
+            command.extend(_color_arguments(color))
             if crop_to_audio and audio_duration is not None:
                 command.extend(["-t", f"{audio_duration:.9f}"])
             if container == "MP4":
@@ -631,6 +668,8 @@ class SaveVideoSimple:
                     "all the runs it queues (each Luna-H3-Chain clip). Every run adds its frames; the run after the "
                     "last clip closes the file, adds the sound wired at that run (Luna-H3-ChainJoin gives the whole "
                     "track then) and gives filename and video. Not with pingpong or Animated WebP / AVIF."}),
+                # Last, so saved workflows keep their widget positions.
+                "color": (COLOR_OPTIONS, {"default": "SDR", "tooltip": COLOR_TOOLTIP}),
             },
             "hidden": {"prompt": "PROMPT", "extra_pnginfo": "EXTRA_PNGINFO", "unique_id": "UNIQUE_ID"},
         }
@@ -663,7 +702,7 @@ class SaveVideoSimple:
         save_metadata, filename_prefix, save_output, pass_frames, crop_to_audio=False, audio_codec="Auto",
         audio_bitrate="192k", log_level="Standard", save_first_frame=False, save_last_frame=False, save_prompt=True,
         audio=None, prompt_text="", output_path="", prompt=None, extra_pnginfo=None, meta_batch=None, unique_id=None,
-        latent=None,
+        latent=None, color="SDR",
     ):
         if images.ndim != 4 or images.shape[-1] < 3:
             raise ValueError("images must be an IMAGE batch shaped [frames, height, width, channels] with RGB channels.")
@@ -672,7 +711,7 @@ class SaveVideoSimple:
                 images, meta_batch, unique_id, prompt, extra_pnginfo, frame_rate, codec, container, bit_depth, quality,
                 pingpong, save_metadata, filename_prefix, output_path, save_output, pass_frames, crop_to_audio,
                 audio_codec, audio_bitrate, save_first_frame, save_last_frame, save_prompt, audio, prompt_text,
-                latent,
+                latent, color,
             )
 
         try:
@@ -688,13 +727,13 @@ class SaveVideoSimple:
 
         if progress_bar is not None:
             progress_bar.update_absolute(0)
-        selected_bit_depth = _selected_bit_depth(codec, bit_depth, images)
+        selected_bit_depth = _selected_bit_depth(codec, bit_depth, images, color)
         height, width = images.shape[1:3]
         frame_chunks = lambda: _iter_frame_byte_chunks(images, selected_bit_depth, pingpong)
         saved = encode_video_file(
             frame_chunks, width, height, _encoded_frame_count(images, pingpong), frame_rate, codec, container,
             selected_bit_depth, quality, save_metadata, filename_prefix, output_path, save_output, audio,
-            crop_to_audio, audio_codec, audio_bitrate, prompt, extra_pnginfo, report_encode_progress,
+            crop_to_audio, audio_codec, audio_bitrate, prompt, extra_pnginfo, report_encode_progress, color=color,
         )
         output_frames = _pingpong_frames(images, pingpong) if pass_frames else images[:0]
         if progress_bar is not None:
@@ -709,7 +748,7 @@ class SaveVideoSimple:
     def _combine_batch(
         self, images, meta_batch, unique_id, prompt, extra_pnginfo, frame_rate, codec, container, bit_depth, quality,
         pingpong, save_metadata, filename_prefix, output_path, save_output, pass_frames, crop_to_audio, audio_codec,
-        audio_bitrate, save_first_frame, save_last_frame, save_prompt, audio, prompt_text, latent=None,
+        audio_bitrate, save_first_frame, save_last_frame, save_prompt, audio, prompt_text, latent=None, color="SDR",
     ):
         """One run of a Luna-MetaBatch chain: this run's frames go into the file the first run opened.
 
@@ -727,14 +766,15 @@ class SaveVideoSimple:
         height, width = images.shape[1:3]
         entry = meta_batch.outputs.get(key)
         if entry is None:
-            depth = _selected_bit_depth(codec, bit_depth, images)
-            probe = _probe_encoder(images[:1], depth, frame_rate, codec, container, quality)
+            depth = _selected_bit_depth(codec, bit_depth, images, color)
+            probe = _probe_encoder(images[:1], depth, frame_rate, codec, container, quality, color)
             total = meta_batch.total_frames
             stream = _MetaBatchStream(dict(
                 width=width, height=height, frame_count=int(total) if total != float("inf") else 0,
                 frame_rate=frame_rate, codec=probe["codec"], container=probe["container"], selected_bit_depth=depth,
                 quality=quality, save_metadata=save_metadata, filename_prefix=filename_prefix, output_path=output_path,
                 save_output=save_output, prompt=prompt, extra_pnginfo=extra_pnginfo, encoder_names=(probe["encoder"],),
+                color=color,
             ))
             handle = _stream_handle(stream)
             next(handle)
@@ -846,12 +886,12 @@ def _check_manager(prompt, unique_id):
                          "count Luna-SaveVideo, so the next batch would never be queued.")
 
 
-def _probe_encoder(frame, depth, frame_rate, codec, container, quality):
+def _probe_encoder(frame, depth, frame_rate, codec, container, quality, color="SDR"):
     """Pick codec, container and encoder once, by encoding one frame to the temp folder, so the real file never has to
     restart halfway through a chain."""
     saved = encode_video_file(
         lambda: _iter_frame_byte_chunks(frame, depth, False), frame.shape[2], frame.shape[1], 1, frame_rate, codec,
-        container, depth, quality, False, "luna_metabatch_probe", "", False,
+        container, depth, quality, False, "luna_metabatch_probe", "", False, color=color,
     )
     try:
         os.remove(saved["path"])
@@ -986,14 +1026,25 @@ def encode_video_file(
     frame_chunks, width, height, frame_count, frame_rate, codec, container, selected_bit_depth, quality,
     save_metadata, filename_prefix, output_path, save_output, audio=None, crop_to_audio=False,
     audio_codec="Auto", audio_bitrate="192k", prompt=None, extra_pnginfo=None, report_encode_progress=None,
-    encoder_names=None, on_output_path=None,
+    encoder_names=None, on_output_path=None, color="SDR",
 ):
     """Encode raw frames to a file: output folder, codec and container fallback, audio, metadata.
 
     `frame_chunks` is a callable returning an iterator of raw rgb24 (8-bit) or rgb48le (10-bit) bytes,
     so the frames can be produced while FFmpeg encodes them and never sit in memory all at once.
     A failed encoder attempt calls it again. Shared by Luna-SaveVideo and Luna-RelayVSR.
+    `color` HDR (COLOR_OPTIONS) needs 10-bit frames and writes H.265 / AV1 with the HDR tags, never the H.264 fallback.
     """
+    hdr = is_hdr(color)
+    if hdr:
+        if selected_bit_depth != 10:
+            raise ValueError(f"[Luna-SaveVideo] {color} needs 10-bit frames; got {selected_bit_depth}-bit.")
+        if _animated_image_settings(container):
+            raise ValueError(f"[Luna-SaveVideo] {container} cannot hold HDR; pick a video container or SDR.")
+        wanted = _hdr_codec(codec, container)
+        if wanted != codec:
+            _log(f"{color}: codec {codec} -> {wanted} (HDR needs 10-bit H.265 or AV1).")
+        codec = wanted
     output_dir = folder_paths.get_output_directory() if save_output else folder_paths.get_temp_directory()
     output_type = "output" if save_output else "temp"
     filename_prefix = _format_filename_prefix(filename_prefix)
@@ -1017,7 +1068,8 @@ def encode_video_file(
     attempts = []
     _log(
         f"Encode {frame_count}f {width}x{height}@{frame_rate:g}fps {selected_bit_depth}-bit; "
-        f"codec={codec}, container={container}, audio={'yes' if audio_path else 'no'}."
+        f"codec={codec}, container={container}, audio={'yes' if audio_path else 'no'}"
+        + (f", {color}." if hdr else ".")
     )
     try:
         animated_settings = _animated_image_settings(container)
@@ -1047,7 +1099,7 @@ def encode_video_file(
                         encoder = _encode_with_available_encoder(
                             ffmpeg, selected_codec, selected_bit_depth, width, height, frame_rate, frame_chunks,
                             output_path, selected_container, quality, quality, metadata_path, audio_path, audio_duration, crop_to_audio,
-                            audio_codec, audio_bitrate, report_encode_progress, encoder_names,
+                            audio_codec, audio_bitrate, report_encode_progress, encoder_names, color,
                         )
                         break
                     except RuntimeError as error:
@@ -1058,6 +1110,8 @@ def encode_video_file(
                     continue
                 break
             else:
+                if hdr:  # H.264 cannot carry this HDR file; say why instead of writing an SDR-looking one
+                    raise RuntimeError(f"{color}: no {codec} encoder worked. " + " | ".join(attempts))
                 fallback_path = os.path.join(output_folder, _output_filename(filename, counter, ".mp4"))
                 if on_output_path is not None:
                     on_output_path(fallback_path)
@@ -1075,7 +1129,7 @@ def encode_video_file(
         if audio_path:
             os.unlink(audio_path[0])
 
-    _log(f"Output: {output_path} ({selected_codec}, {encoder}, {selected_bit_depth}-bit).")
+    _log(f"Output: {output_path} ({selected_codec}, {encoder}, {selected_bit_depth}-bit{', ' + color if hdr else ''}).")
     return {"path": output_path, "subfolder": subfolder, "type": output_type,
             "codec": selected_codec, "container": selected_container, "encoder": encoder}
 

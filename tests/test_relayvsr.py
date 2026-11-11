@@ -174,6 +174,61 @@ class NodeTests(unittest.TestCase):
                 False, False, "Auto", "192k",
             )
 
+    def stream_line(self, path):
+        """FFmpeg's own description of the file's video stream: codec, pixel format and colour tags."""
+        import subprocess
+
+        result = subprocess.run([video_nodes.find_ffmpeg(), "-hide_banner", "-i", path], capture_output=True, text=True)
+        return next(line for line in result.stderr.splitlines() if "Video:" in line)
+
+    def test_hdr_hlg_save_writes_10bit_hevc_with_the_hdr_tags(self):
+        # Peter, 2026-11-11: an HDR file an HDR screen shows as HDR. H.264 asked for, H.265 written.
+        result = video_nodes.SaveVideoSimple().combine(
+            clip(9, 64, 64), 24.0, "H.264", "MP4", "8-bit", 18, False, False, "hdr_hlg", True, False,
+            color="HDR HLG (BT.2020)",
+        )
+        _, path, video = result["result"]
+        line = self.stream_line(path)
+        self.assertIn("hevc", line)
+        self.assertIn("yuv420p10le", line)
+        self.assertIn("bt2020nc/bt2020/arib-std-b67", line)
+        self.assertEqual(result["ui"]["gifs"][0]["bit_depth"], 10)
+        self.assertEqual(tuple(self.frames_in(path).shape), (9, 64, 64, 3))
+        del video
+
+    def test_relayvsr_hdr_pq_save(self):
+        decoder = tiny_decoder()
+        relay.sample_keyframes = lambda model, imgs, seed, sampler, scheduler: latent_for(imgs, decoder)
+        result = relay.LunaRelayVSR().upscale(
+            clip(16), FakeModel(decoder.latent_stride), FakeVAE(decoder), 24.0, 0, 1.0, "H.264", "MP4", "8-bit", 18,
+            "relay_pq", "", True, False, False, "Auto", "192k", color="HDR PQ (BT.2020)",
+        )
+        path, video = result["result"]
+        line = self.stream_line(path)
+        self.assertIn("hevc", line)
+        self.assertIn("bt2020nc/bt2020/smpte2084", line)
+        self.assertEqual(tuple(self.frames_in(path).shape), (16, 64, 96, 3))
+        del video
+
+    def test_sdr_save_is_unchanged(self):
+        self.assertEqual(video_nodes._color_arguments("SDR"), [])
+        self.assertEqual(video_nodes._selected_bit_depth("H.264", "8-bit", clip(2), "SDR"), 8)
+        self.assertEqual(video_nodes._selected_bit_depth("H.264", "8-bit", clip(2), "HDR HLG (BT.2020)"), 10)
+        self.assertEqual(video_nodes._hdr_codec("Auto", "Auto"), "H.265 (HEVC)")
+        self.assertEqual(video_nodes._hdr_codec("VP9", "WebM"), "AV1")
+        self.assertEqual(video_nodes._hdr_codec("AV1", "MP4"), "AV1")
+        with self.assertRaises(ValueError):
+            video_nodes.SaveVideoSimple().combine(
+                clip(3, 64, 64), 24.0, "Auto", "Animated WebP", "Auto", 18, False, False, "hdr_webp", True, False,
+                color="HDR HLG (BT.2020)",
+            )
+
+    def test_color_widget_comes_last_on_both_nodes(self):
+        for node in (relay.LunaRelayVSR, video_nodes.SaveVideoSimple):
+            optional = node.INPUT_TYPES()["optional"]
+            self.assertEqual(list(optional)[-1], "color")
+            self.assertEqual(optional["color"][1]["default"], "SDR")
+
     def test_save_video_still_encodes_after_the_encoder_moved(self):
         images = clip(9, 64, 64)
         result = video_nodes.SaveVideoSimple().combine(
