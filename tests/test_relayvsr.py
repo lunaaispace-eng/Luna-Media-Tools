@@ -337,6 +337,68 @@ class WindowsAheadTests(unittest.TestCase):
         self.assertEqual(list(relay.run_ahead(produce, 1)), [True])
 
 
+class ColorAutoTests(unittest.TestCase):
+    """color Auto follows RTX Video HDR before the node; a bypassed one is not in the prompt ComfyUI runs."""
+
+    def graph(self, rtx_space=None, through_watermark=True):
+        prompt = {
+            "10": {"class_type": "VAEDecode", "inputs": {"samples": ["9", 0], "vae": ["8", 0]}},
+            "11": {"class_type": "DLSS5EnhanceImages", "inputs": {"images": ["10", 0], "settings": ["12", 0]}},
+            "30": {"class_type": "Luna-RelayVSR", "inputs": {}},
+        }
+        last = "11"
+        if rtx_space is not None:
+            prompt["20"] = {"class_type": "RTXTrueHDR", "inputs": {"images": ["11", 0], "output_colorspace": rtx_space}}
+            last = "20"
+        if through_watermark:
+            prompt["21"] = {"class_type": "Luna-Watermark", "inputs": {"images": [last, 0]}}
+            last = "21"
+        prompt["30"]["inputs"]["images"] = [last, 0]
+        return prompt
+
+    def test_follows_rtx_video_hdr(self):
+        self.assertEqual(relay.color_from_graph(self.graph("HDR"), "30")[0], "HDR HLG (BT.2020)")
+        self.assertEqual(relay.color_from_graph(self.graph("HDR PQ"), "30")[0], "HDR PQ (BT.2020)")
+        self.assertEqual(relay.color_from_graph(self.graph("HDR", through_watermark=False), 30)[0], "HDR HLG (BT.2020)")
+
+    def test_bypassed_or_absent_is_sdr(self):
+        self.assertEqual(relay.color_from_graph(self.graph(None), "30")[0], "SDR")
+        self.assertEqual(relay.color_from_graph(None, "30")[0], "SDR")
+        self.assertEqual(relay.color_from_graph(self.graph("HDR"), None)[0], "SDR")
+
+    def test_a_loop_in_the_graph_ends(self):
+        prompt = {"1": {"class_type": "X", "inputs": {"images": ["2", 0]}},
+                  "2": {"class_type": "Y", "inputs": {"images": ["1", 0]}},
+                  "30": {"class_type": "Luna-RelayVSR", "inputs": {"images": ["1", 0]}}}
+        self.assertEqual(relay.color_from_graph(prompt, "30")[0], "SDR")
+
+    def test_auto_is_last_and_reaches_the_encoder(self):
+        options = relay.LunaRelayVSR.INPUT_TYPES()["optional"]["color"][0]
+        self.assertEqual(options[-1], relay.COLOR_AUTO)
+        self.assertEqual(options[:-1], list(video_nodes.COLOR_OPTIONS))
+        self.assertEqual(relay.LunaRelayVSR.INPUT_TYPES()["hidden"]["unique_id"], "UNIQUE_ID")
+        decoder = tiny_decoder()
+        old_sample, old_encode = relay.sample_keyframes, relay.encode_video_file
+        seen = []
+        try:
+            relay.sample_keyframes = lambda model, imgs, seed, sampler, scheduler: latent_for(imgs, decoder)
+
+            def fake_encode(frame_chunks, *args, **kwargs):
+                seen.append((args[6], kwargs["color"]))  # selected_bit_depth, color
+                return {"path": os.path.join(tempfile.gettempdir(), "relay_fake.mp4"), "subfolder": None}
+
+            relay.encode_video_file = fake_encode
+            for space, expected, depth in (("HDR", "HDR HLG (BT.2020)", 10), (None, "SDR", 8)):
+                relay.LunaRelayVSR().upscale(
+                    clip(2), FakeModel(decoder.latent_stride), FakeVAE(decoder), 24.0, 0, 1.0, "H.264", "MP4",
+                    "8-bit", 18, "x", "", True, False, False, "Auto", "192k", "euler", "simple", 2,
+                    prompt=self.graph(space), color=relay.COLOR_AUTO, unique_id="30",
+                )
+                self.assertEqual(seen[-1], (depth, expected))
+        finally:
+            relay.sample_keyframes, relay.encode_video_file = old_sample, old_encode
+
+
 class BitDepthTests(unittest.TestCase):
     """detect_bit_depth samples before it converts, so a long 4K batch costs no copy of itself."""
 

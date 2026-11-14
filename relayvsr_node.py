@@ -166,6 +166,38 @@ def byte_chunks(packed, max_chunk_bytes=64 * 1024 * 1024):
         yield memoryview(array[start:start + step]).cast("B")
 
 
+COLOR_AUTO = "Auto (follow RTX Video HDR)"
+COLOR_AUTO_TOOLTIP = (
+    " Auto: follows RTX Video HDR before this node. Active -> saved as its HDR (output_colorspace HDR = HLG, HDR PQ = PQ); "
+    "bypassed (e.g. by a Luna-StatusSwitch) or absent -> SDR. Set it once and use only the switch.")
+_RTX_HDR_CLASS = "RTXTrueHDR"
+_RTX_HDR_COLORS = {"HDR": "HDR HLG (BT.2020)", "HDR PQ": "HDR PQ (BT.2020)"}
+
+
+def color_from_graph(prompt, unique_id):
+    """`color` Auto: (color, reason). Walks up the `images` links of the graph ComfyUI runs.
+
+    An RTX Video HDR on the way gives its HDR; none gives SDR. ComfyUI leaves a bypassed node out of the graph it runs
+    and joins its links, so a bypassed RTX Video HDR is simply not found.
+    """
+    if not isinstance(prompt, dict) or unique_id is None:
+        return "SDR", "no graph to read"
+    seen = set()
+    link = (prompt.get(str(unique_id)) or {}).get("inputs", {}).get("images")
+    while isinstance(link, (list, tuple)) and link and str(link[0]) not in seen:
+        node_id = str(link[0])
+        seen.add(node_id)
+        node = prompt.get(node_id) or {}
+        inputs = node.get("inputs", {})
+        if node.get("class_type") == _RTX_HDR_CLASS:
+            space = inputs.get("output_colorspace", "HDR")
+            if space in _RTX_HDR_COLORS:
+                return _RTX_HDR_COLORS[space], f"RTX Video HDR node {node_id}, output_colorspace {space}"
+            return _RTX_HDR_COLORS["HDR"], f"RTX Video HDR node {node_id}, output_colorspace not readable, its default HLG"
+        link = inputs.get("images", inputs.get("image"))
+    return "SDR", "no active RTX Video HDR before this node"
+
+
 _DONE = object()
 
 
@@ -286,9 +318,10 @@ class LunaRelayVSR:
             "optional": {
                 "audio": ("AUDIO", {"tooltip": "The source sound, from Luna-LoadVideo.audio. Copied into the file."}),
                 # Last, so saved workflows keep their widget positions (Peter, 2026-11-11: HDR save).
-                "color": (COLOR_OPTIONS, {"default": "SDR", "tooltip": COLOR_TOOLTIP}),
+                # Auto appended last in the list, so saved values keep their meaning (Peter, 2026-11-14).
+                "color": (COLOR_OPTIONS + [COLOR_AUTO], {"default": "SDR", "tooltip": COLOR_TOOLTIP + COLOR_AUTO_TOOLTIP}),
             },
-            "hidden": {"prompt": "PROMPT", "extra_pnginfo": "EXTRA_PNGINFO"},
+            "hidden": {"prompt": "PROMPT", "extra_pnginfo": "EXTRA_PNGINFO", "unique_id": "UNIQUE_ID"},
         }
 
     RETURN_TYPES = ("STRING", "VIDEO")
@@ -305,8 +338,12 @@ class LunaRelayVSR:
         self, images, model, vae, frame_rate, seed, detail, codec, container, bit_depth, quality, filename_prefix,
         output_path, save_output, save_metadata, crop_to_audio, audio_codec, audio_bitrate, sampler_name="euler",
         scheduler="simple", windows_ahead=2, audio=None, prompt=None, extra_pnginfo=None, color="SDR",
+        unique_id=None,
     ):
         _, decoder = _check_inputs(images, model, vae)
+        if color == COLOR_AUTO:
+            color, reason = color_from_graph(prompt, unique_id)
+            _log(f"color Auto -> {color} ({reason}).")
         frame_count = images.shape[0]
         factor = decoder.upscale_factor
         height, width = images.shape[1] * factor, images.shape[2] * factor
