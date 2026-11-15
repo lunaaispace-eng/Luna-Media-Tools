@@ -185,7 +185,7 @@ def _codec_candidates(codec):
     return ("AV1", "VP9", "H.264") if codec == "Auto" else (codec,)
 
 
-# HDR save (Peter, 2026-11-11: "do it"). The frames arrive already HDR-coded, e.g. from RTX Video HDR ("HDR" = BT.2020
+# HDR save (2026-11-11). The frames arrive already HDR-coded, e.g. from RTX Video HDR ("HDR" = BT.2020
 # with HLG, "HDR PQ" = BT.2020 with PQ). The file gets 10-bit, the BT.2020 conversion matrix and the HDR tags, so an HDR
 # screen shows it as HDR. SDR writes exactly what it wrote before (no tags).
 COLOR_OPTIONS = ["SDR", "HDR HLG (BT.2020)", "HDR PQ (BT.2020)"]

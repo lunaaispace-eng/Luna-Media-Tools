@@ -182,7 +182,7 @@ class NodeTests(unittest.TestCase):
         return next(line for line in result.stderr.splitlines() if "Video:" in line)
 
     def test_hdr_hlg_save_writes_10bit_hevc_with_the_hdr_tags(self):
-        # Peter, 2026-11-11: an HDR file an HDR screen shows as HDR. H.264 asked for, H.265 written.
+        # 2026-11-11: an HDR file an HDR screen shows as HDR. H.264 asked for, H.265 written.
         result = video_nodes.SaveVideoSimple().combine(
             clip(9, 64, 64), 24.0, "H.264", "MP4", "8-bit", 18, False, False, "hdr_hlg", True, False,
             color="HDR HLG (BT.2020)",

@@ -16,7 +16,7 @@ duration), a player on the node that plays the source before any run, one side s
     node's ⚙ panel; the everyday ones are on the face and fold with the chevron;
   * the face shows what the run will load (frames, size, time, memory) beforehand,
     from the same plan the run uses (media_io.plan_load).
-2026-10-22: three sources (Peter's ask, after VHS Load Video (Path) / Load Images
+2026-10-22: three sources (modelled on VHS Load Video (Path) / Load Images
 (Path), GPL-3.0, read only — nothing taken from their code): the picked/uploaded
 file, a typed or wired path or http(s) link (a link is downloaded once into
 input/luna_downloads), or a folder with a video count. Every output is a list, so a

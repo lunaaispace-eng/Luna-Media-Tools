@@ -306,7 +306,7 @@ class LunaRelayVSR:
                 # Appended last, so saved workflows keep their widget positions.
                 "sampler_name": (_sampler_names(), {"default": "euler",
                     "tooltip": "Sampler of the one keyframe step, as the KSampler's sampler_name in the native graph "
-                               "(euler, or er_sde as in Peter's relayvsr_x2_video KJ)."}),
+                               "(euler, or er_sde as in the relayvsr_x2_video KJ workflow)."}),
                 "scheduler": (_scheduler_names(), {"default": "simple",
                     "tooltip": "Scheduler of the one keyframe step, as the KSampler's scheduler in the native graph."}),
                 "windows_ahead": ("INT", {"default": 2, "min": 0, "max": 8,
@@ -317,8 +317,8 @@ class LunaRelayVSR:
             },
             "optional": {
                 "audio": ("AUDIO", {"tooltip": "The source sound, from Luna-LoadVideo.audio. Copied into the file."}),
-                # Last, so saved workflows keep their widget positions (Peter, 2026-11-11: HDR save).
-                # Auto appended last in the list, so saved values keep their meaning (Peter, 2026-11-14).
+                # Last, so saved workflows keep their widget positions (2026-11-11: HDR save).
+                # Auto appended last in the list, so saved values keep their meaning (2026-11-14).
                 "color": (COLOR_OPTIONS + [COLOR_AUTO], {"default": "SDR", "tooltip": COLOR_TOOLTIP + COLOR_AUTO_TOOLTIP}),
             },
             "hidden": {"prompt": "PROMPT", "extra_pnginfo": "EXTRA_PNGINFO", "unique_id": "UNIQUE_ID"},
