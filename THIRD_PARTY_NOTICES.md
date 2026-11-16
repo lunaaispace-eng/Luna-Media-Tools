@@ -1,7 +1,8 @@
 # Third-party notices
 
-Luna-Media-Tools is licensed GPL-3.0 (see [LICENSE](LICENSE)). It contains code derived
-from the projects below. Each header in the source files names what was changed.
+- Luna-Media-Tools is licensed GPL-3.0 (see [LICENSE](LICENSE)).
+- It contains code derived from the projects below.
+- Each header in the source files names what was changed.
 
 | Project | Licence | What is derived from it | Where |
 |---|---|---|---|
@@ -12,15 +13,14 @@ from the projects below. Each header in the source files names what was changed.
 | [ComfyUI-VideoHelperSuite](https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite), commit `4d907be` | GPL-3.0 | Luna-MetaBatch: the Meta Batch Manager (`videohelpersuite/nodes.py` BatchManager) and the re-queue (`videohelpersuite/utils.py` requeue_workflow) | `meta_batch.py` |
 | Ideogram 4 Prompt Builder in KJNodes, by Kijai | GPL-3.0 | Luna-Ideogram is a fork of it | `ideogram4_builder.py`, `web/ideogram4_prompt_builder.js`, `web/utility.js`, `fonts/FreeMono.ttf` |
 
-The RTX nodes drive NVIDIA RTX VFX (`nvvfx`), which is NVIDIA's software under its own
-terms and is not part of this pack.
+- The RTX nodes drive NVIDIA RTX VFX (`nvvfx`), which is NVIDIA's software under its own terms and is not part of this pack.
 
 ## Licence of the shared frontend kit
 
-`web/luna_theme.mjs`, `web/luna_help.mjs` and `web/luna_collapse.mjs` (and `web/luna_pack_theme.js`,
-which uses them) are Apache-2.0, Copyright 2026 Luna AI Space. They stay Apache-2.0 inside this
-GPL-3.0 pack; Apache-2.0 code may be combined into a GPL-3.0 work. Copy them into another pack under
-Apache-2.0.
+- `web/luna_theme.mjs`, `web/luna_help.mjs` and `web/luna_collapse.mjs` (and `web/luna_pack_theme.js`, which uses them) are
+  Apache-2.0, Copyright 2026 Luna AI Space.
+- They stay Apache-2.0 inside this GPL-3.0 pack; Apache-2.0 code may be combined into a GPL-3.0 work.
+- Copy them into another pack under Apache-2.0.
 
 ## What each licence asks
 
