@@ -30,6 +30,7 @@ import { registerLunaCollapse } from "./luna_collapse.mjs";
 registerLunaHelp(app, [
     "Luna-LoadVideo", "Luna-SaveImage", "Luna-SaveVideo", "Luna-ImagePrecision", "Luna-Degrid",
     "Luna-Ideogram", "Luna-Watermark", "Luna-StatusSwitch", "Luna-RTXUpscaler", "Luna-RTXFrameGen", "Luna-RelayVSR", "Luna-MetaBatch",
+    "Luna-ImageLoader", "Luna-ImageResolution",
 ], "LunaMediaTools.Help");
 
 // The chevron beside it folds the settings away, leaving sockets and whatever the
@@ -39,4 +40,5 @@ registerLunaHelp(app, [
 registerLunaCollapse(app, [
     "Luna-SaveImage", "Luna-SaveVideo", "Luna-LoadVideo",
     "Luna-Ideogram", "Luna-Watermark", "Luna-StatusSwitch", "Luna-RTXUpscaler", "Luna-RTXFrameGen", "Luna-RelayVSR",
+    "Luna-ImageLoader", "Luna-ImageResolution",
 ], "LunaMediaTools.Collapse");

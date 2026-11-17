@@ -14,7 +14,8 @@ PACK = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 COMFY = os.environ.get("COMFYUI_DIR", r"E:\ComfyUI-Easy-Install\ComfyUI")
 
 IDS = ["Luna-SaveImage", "Luna-SaveVideo", "Luna-LoadVideo", "Luna-ImagePrecision", "Luna-Degrid",
-       "Luna-Ideogram", "Luna-Watermark", "Luna-StatusSwitch", "Luna-RTXUpscaler", "Luna-RTXFrameGen", "Luna-RelayVSR", "Luna-MetaBatch"]
+       "Luna-Ideogram", "Luna-Watermark", "Luna-StatusSwitch", "Luna-RTXUpscaler", "Luna-RTXFrameGen", "Luna-RelayVSR", "Luna-MetaBatch",
+       "Luna-ImageLoader", "Luna-ImageResolution"]
 
 
 def load_pack():

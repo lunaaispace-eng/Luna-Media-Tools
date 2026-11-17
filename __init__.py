@@ -1,9 +1,9 @@
 """Luna-Media-Tools — general image and video tools for ComfyUI.
 
-Twelve nodes, node id = display name, category "Luna-Media-Tools":
+Fourteen nodes, node id = display name, category "Luna-Media-Tools":
   Luna-SaveImage, Luna-SaveVideo, Luna-LoadVideo, Luna-ImagePrecision, Luna-Degrid,
   Luna-Ideogram, Luna-Watermark, Luna-StatusSwitch, Luna-RTXUpscaler, Luna-RTXFrameGen, Luna-RelayVSR,
-  Luna-MetaBatch.
+  Luna-MetaBatch, Luna-ImageLoader, Luna-ImageResolution.
 
 All V1 mappings (Luna-Ideogram is a V3 class registered through the V1 mapping, as the
 standalone pack did). The frontend lives in one folder, web/.
@@ -35,6 +35,14 @@ from .relayvsr_node import (
     NODE_CLASS_MAPPINGS as _RELAY_C,
     NODE_DISPLAY_NAME_MAPPINGS as _RELAY_D,
 )
+from .image_loader import (
+    NODE_CLASS_MAPPINGS as _IMGLOAD_C,
+    NODE_DISPLAY_NAME_MAPPINGS as _IMGLOAD_D,
+)
+from .image_resolution import (
+    NODE_CLASS_MAPPINGS as _IMGRES_C,
+    NODE_DISPLAY_NAME_MAPPINGS as _IMGRES_D,
+)
 from .luna_tools import (
     NODE_CLASS_MAPPINGS as _TOOLS_C,
     NODE_DISPLAY_NAME_MAPPINGS as _TOOLS_D,
@@ -48,6 +56,8 @@ for _c, _d in (
     (_TOOLS_C, _TOOLS_D),
     (_RELAY_C, _RELAY_D),
     (_META_C, _META_D),
+    (_IMGLOAD_C, _IMGLOAD_D),
+    (_IMGRES_C, _IMGRES_D),
 ):
     NODE_CLASS_MAPPINGS.update(_c)
     NODE_DISPLAY_NAME_MAPPINGS.update(_d)

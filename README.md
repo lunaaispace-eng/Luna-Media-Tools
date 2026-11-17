@@ -1,6 +1,6 @@
 # Luna-Media-Tools
 
-General image and video tools for ComfyUI, twelve nodes in one pack:
+General image and video tools for ComfyUI, fourteen nodes in one pack:
 - save an image;
 - save a video on the GPU;
 - load a video with its sound;
@@ -11,7 +11,9 @@ General image and video tools for ComfyUI, twelve nodes in one pack:
 - switch other nodes on and off;
 - upscale with NVIDIA RTX VFX;
 - add in-between frames with RTX frame generation;
-- upscale a video with RelayVSR straight to a file.
+- upscale a video with RelayVSR straight to a file;
+- load up to nine pictures for an image edit or a new image, each with its role and its own size;
+- set the size of the image to generate, from ratios, social media, print, cinema, display or image-model presets.
 
 Every node:
 - has its display name as its id;
@@ -54,6 +56,11 @@ python_embeded\python.exe -m pip install nvidia-vfx
 - **Luna-RTXFrameGen**: Adds in-between frames with NVIDIA RTX frame generation.
 - **Luna-MetaBatch**: Runs the graph once per batch, so one video is written across several queued runs.
 - **Luna-RelayVSR**: RelayVSR video upscale straight to a file, one window at a time, so 4K fits in RAM.
+- **Luna-ImageLoader**: Up to 9 pictures as Image 1…9, each with a role (edit base, reference, style, composition) and its
+  own size; out as `width`, `height`, `asset_brief`, `refs` (for the Luna-LLM-Tools writers) and `image_1…image_9`.
+- **Luna-ImageResolution**: The size to generate and an empty latent in the chosen model's own shape (MiniMax H3 Image,
+  Qwen-Image 2.1, MOSS-Image, Fibo 2.0, Krea 2, Z-Image Turbo, Flux.1, Flux.2, SDXL); custom sizes from
+  `ComfyUI/user/luna/resolutions.json`.
 
 ## Replaces
 
@@ -77,4 +84,4 @@ python -m pytest . --rootdir=.
 
 - GPL-3.0, see [LICENSE](LICENSE).
 - Derived code and its licences: [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
-- The three `luna_*.mjs` frontend kit files are Apache-2.0.
+- The three `luna_theme`, `luna_help`, `luna_collapse` frontend kit files are Apache-2.0.
