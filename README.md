@@ -53,7 +53,9 @@ python_embeded\python.exe -m pip install nvidia-vfx
 - **Luna-Watermark**: Overlays a watermark on images or video frames.
 - **Luna-StatusSwitch**: Mutes or bypasses connected nodes from one on/off switch.
 - **Luna-RTXUpscaler**: RTX denoise, deblur and upscale, each with its own strength.
-- **Luna-RTXFrameGen**: Adds in-between frames with NVIDIA RTX frame generation.
+- **Luna-RTXFrameGen**: Adds in-between frames with NVIDIA RTX frame generation. Wire the source frame rate into `fps`
+  (unwired 24); its `fps` output (fps x multiplier, x2 in timestep mode) goes to Luna-SaveVideo or Luna-RelayVSR
+  `frame_rate`.
 - **Luna-MetaBatch**: Runs the graph once per batch, so one video is written across several queued runs.
 - **Luna-RelayVSR**: RelayVSR video upscale straight to a file, one window at a time, so 4K fits in RAM.
 - **Luna-ImageLoader**: Up to 9 picture cards, @image1…@image9 in the prompt, each with a role (edit base, reference, style,

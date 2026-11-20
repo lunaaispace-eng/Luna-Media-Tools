@@ -16,19 +16,23 @@ HD30 = {"width": 1920, "height": 1080, "fps": 30.0, "duration": 12.0, "audio": T
 
 
 class GridCountTests(unittest.TestCase):
-    def test_h3_nearest(self):
-        self.assertEqual(grid_count(120, "h3", 1000), 124)
-        self.assertEqual(grid_count(110, "h3", 1000), 107)
+    """The shared frame rule (luna_units, Luna-MinimaxH3 SPEC 1): a count made for H3 rounds UP onto the grid;
+    when that does not fit in the file, what is there is cut DOWN."""
+
+    def test_h3_rounds_up(self):
+        self.assertEqual(grid_count(120, "h3", 200), 124)
+        self.assertEqual(grid_count(110, "h3", 1000), 124)
 
     def test_h3_no_trained_cap(self):
-        self.assertEqual(grid_count(500, "h3", 1000), 498)   # 17*29+5
+        self.assertEqual(grid_count(500, "h3", 1000), 515)   # 17*30+5, past 362: kept
 
     def test_h3_never_past_available(self):
+        self.assertEqual(grid_count(130, "h3", 130), 124)    # 141 does not fit
         self.assertEqual(grid_count(124, "h3", 120), 107)
         self.assertEqual(grid_count(10, "h3", 4), 0)
 
     def test_ltx(self):
-        self.assertEqual(grid_count(100, "ltx", 1000), 97)
+        self.assertEqual(grid_count(100, "ltx", 1000), 105)
         self.assertEqual(grid_count(100, "ltx", 90), 89)
 
     def test_free(self):
@@ -62,8 +66,13 @@ class PlanLoadTests(unittest.TestCase):
             plan_load(HD30, fps=30, grid="h3")
 
     def test_h3_to_end_snaps_down(self):
-        p = plan_load(HD30, grid="h3")   # 12 s * 24 = 288 -> 277
+        p = plan_load(HD30, grid="h3")   # 12 s * 24 = 288; up is 294, past the file, so down to 277
         self.assertEqual(p["frames"], 277)
+
+    def test_h3_past_362_is_kept_with_a_note(self):
+        p = plan_load({"width": 640, "height": 360, "fps": 24.0, "duration": 20.0}, frames=384, grid="h3")
+        self.assertEqual(p["frames"], 396)
+        self.assertTrue(any("past the 362 frames" in n for n in p["notes"]))
 
     def test_one_side_keeps_shape(self):
         p = plan_load(HD30, width=1280)

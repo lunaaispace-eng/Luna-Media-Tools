@@ -270,9 +270,11 @@ def _load(path: str, st: dict) -> tuple[torch.Tensor, tuple[int, int], str | Non
 
 
 def empty_refs(brief: str, naming: dict | None = None) -> dict:
-    """A well-formed LUNA_H3_REFS with nothing in it (the Asset Loader's keys, plus `roles` and `naming`)."""
+    """A well-formed LUNA_H3_REFS with nothing in it: the bundle's keys (Luna-MinimaxH3 `SPEC.md` § 2), `roles`,
+    `naming` and the keyframe list. No sound and no keyframe here: `vocals` None, `keyframes` []."""
     return {"images": [], "videos": [], "video_audios": [], "audios": [], "width": 0, "height": 0, "brief": brief,
-            "song": None, "roles": [], "naming": naming if naming is not None else luna_naming.make("cloud"),
+            "song": None, "vocals": None, "keyframes": [], "roles": [],
+            "naming": naming if naming is not None else luna_naming.make("cloud"),
             "items": {"images": [], "videos": [], "video_audios": [], "audios": [], "song": "", "extra": []}}
 
 

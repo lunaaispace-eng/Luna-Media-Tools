@@ -200,8 +200,9 @@ class RTXNodeShapeTests(unittest.TestCase):
     def test_node_shape(self):
         for cls, node_id in ((up.LunaRTXUpscaler, "Luna-RTXUpscaler"), (fg.LunaRTXFrameGen, "Luna-RTXFrameGen")):
             self.assertEqual(cls.CATEGORY, "Luna-Media-Tools")
-            self.assertEqual(cls.RETURN_TYPES, ("IMAGE",))
-            self.assertTrue(cls.OUTPUT_TOOLTIPS)
+            self.assertEqual(cls.RETURN_TYPES[0], "IMAGE")
+            self.assertEqual(cls.RETURN_TYPES, ("IMAGE",) if cls is up.LunaRTXUpscaler else ("IMAGE", "FLOAT"))
+            self.assertEqual(len(cls.OUTPUT_TOOLTIPS), len(cls.RETURN_TYPES))
             self.assertIn(node_id, cls.DESCRIPTION)
             self.assertGreater(len(cls.DESCRIPTION), 200)
             schema = cls.INPUT_TYPES()

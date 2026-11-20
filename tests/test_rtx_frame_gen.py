@@ -89,10 +89,11 @@ def cpu_sdk(monkeypatch):
 @pytest.mark.parametrize('multiplier', [2, 3, 16])
 def test_preserves_sources_count_owned_buffer_and_dtype(cpu_sdk, packed, multiplier):
     images = torch.stack([torch.full((8,8,4), v) for v in (.125, .5, .875)]).half()
-    out, = fg.LunaRTXFrameGen().luna_rtx_generate_frames(images,
+    out, fps = fg.LunaRTXFrameGen().luna_rtx_generate_frames(images,
         multiplier=multiplier, image_encoding='10-bit RGB (RGB10A2)' if packed else '8-bit RGB',
         shot_change=True, automatic_shot_change_detection=False, mode='HIGH', device_id=1)
     assert out.shape == (2*multiplier+1,8,8,3)
+    assert fps == 24.0*multiplier
     assert torch.equal(out[::multiplier], images[..., :3].to(out.dtype))
     assert out.dtype == (torch.float32 if packed else torch.float16)
     assert out[1].mean() < out[multiplier+1].mean()
@@ -107,9 +108,10 @@ def test_timestep_order_and_warning(cpu_sdk, monkeypatch):
     logs=[]
     monkeypatch.setattr(fg, '_luna_fg_log', lambda *a: logs.append(a))
     images=torch.stack([torch.full((8,8,3), v) for v in (0., .5, 1.)])
-    out,=fg.LunaRTXFrameGen().luna_rtx_generate_frames(images,
+    out,fps=fg.LunaRTXFrameGen().luna_rtx_generate_frames(images,
         generation_type='specific timestep',timestep=.25,multiplier=16)
     assert out.shape[0]==5
+    assert fps==48.0
     assert torch.equal(out[::2],images)
     assert out[1,0,0,0]==.125 and out[3,0,0,0]==.625
     assert logs and 'nonuniform' in logs[0][1]
@@ -127,8 +129,9 @@ def test_invalid_requests(kwargs):
 def test_one_frame_no_cuda_or_sdk(monkeypatch):
     monkeypatch.setattr(fg, '_luna_fg_sdk', lambda: pytest.fail('passthrough must not import SDK'))
     images=torch.ones(1,8,8,4).half()
-    out,=fg.LunaRTXFrameGen().luna_rtx_generate_frames(images)
+    out,fps=fg.LunaRTXFrameGen().luna_rtx_generate_frames(images)
     assert torch.equal(out,images[..., :3]) and out.dtype==torch.float16
+    assert fps==48.0
 
 
 def test_missing_sdk_and_import_free_schema(monkeypatch):
@@ -181,3 +184,57 @@ def test_registration_abi_and_names():
     import Luna_Media_Tools_under_test as pack
     assert pack.NODE_CLASS_MAPPINGS['Luna-RTXFrameGen'] is fg.LunaRTXFrameGen
     assert pack.NODE_CLASS_MAPPINGS['Luna-RTXUpscaler'] is rtx.LunaRTXUpscaler
+
+
+# --- fps (Luna-Media-Tools SPEC.md § 1, 2026-11-20): an optional fps socket, unwired 24, and an fps output, both last ---
+
+def test_fps_socket_and_output_are_appended_last():
+    for packed in (False, True):
+        schema = None
+        import unittest.mock as mock
+        with mock.patch.object(fg, '_luna_fg_sdk', lambda: (None, None, None, packed)):
+            schema = fg.LunaRTXFrameGen.INPUT_TYPES()
+        assert list(schema['required']) == ['images', 'generation_type', 'multiplier', 'timestep', 'mode',
+                                            'automatic_shot_change_detection', 'shot_change', 'device_id']
+        assert list(schema['optional']) == ['image_encoding', 'auto_unload_models', 'use_mmap', 'fps']
+        kind, options = schema['optional']['fps']
+        assert kind == 'FLOAT' and options['forceInput'] is True and options['default'] == 24.0
+        for name in ('Luna-LoadVideo', 'Unwired = 24'):
+            assert name in options['tooltip']
+    cls = fg.LunaRTXFrameGen
+    assert cls.RETURN_NAMES == ('images', 'fps') and cls.RETURN_TYPES == ('IMAGE', 'FLOAT')
+    assert len(cls.OUTPUT_TOOLTIPS) == 2
+    for consumer in ('Luna-SaveVideo frame_rate', 'Luna-RelayVSR frame_rate'):
+        assert consumer in cls.OUTPUT_TOOLTIPS[1] and consumer in cls.DESCRIPTION
+    assert 'No FPS' not in cls.DESCRIPTION
+    assert all(text.isascii() for text in (cls.DESCRIPTION, *cls.OUTPUT_TOOLTIPS))
+
+
+@pytest.mark.parametrize('kwargs, frames, expected', [
+    ({'multiplier': 3, 'fps': 24}, 7, 72.0),
+    ({'multiplier': 2}, 5, 48.0),                                    # fps unwired: 24
+    ({'generation_type': 'specific timestep', 'fps': 25}, 5, 50.0),  # timestep mode: x2
+    ({'multiplier': 16, 'fps': 23.976}, 33, 23.976*16),
+])
+def test_fps_output_is_input_fps_times_step(cpu_sdk, kwargs, frames, expected):
+    images = torch.stack([torch.full((8,8,3), v) for v in (0., .5, 1.)])
+    out, fps = fg.LunaRTXFrameGen().luna_rtx_generate_frames(images, **kwargs)
+    assert out.shape[0] == frames
+    assert isinstance(fps, float) and fps == pytest.approx(expected)
+
+
+def test_one_frame_passes_through_with_fps_times_step(monkeypatch):
+    monkeypatch.setattr(fg, '_luna_fg_sdk', lambda: pytest.fail('passthrough must not import SDK'))
+    images = torch.rand(1,8,8,3)
+    out, fps = fg.LunaRTXFrameGen().luna_rtx_generate_frames(images, multiplier=2, fps=30.0)
+    assert torch.equal(out, images) and fps == 60.0
+    out, fps = fg.LunaRTXFrameGen().luna_rtx_generate_frames(images, generation_type='specific timestep',
+                                                             multiplier=5, fps=30.0)
+    assert torch.equal(out, images) and fps == 60.0
+
+
+@pytest.mark.parametrize('bad', [0, -24.0, float('nan'), float('inf'), True, 'fast'])
+def test_bad_fps_is_refused_before_any_work(bad, monkeypatch):
+    monkeypatch.setattr(fg, '_luna_fg_sdk', lambda: pytest.fail('a bad fps must fail before the SDK'))
+    with pytest.raises(ValueError, match='fps'):
+        fg.LunaRTXFrameGen().luna_rtx_generate_frames(torch.zeros(2,8,8,3), fps=bad)

@@ -2,7 +2,8 @@
 # commit ab364c5, GPL-3.0 (see THIRD_PARTY_NOTICES.md). Source file: nodes/nodes_rtx_frame_generation.py
 # Changes: renamed to Luna-RTXFrameGen (category Luna-Media-Tools); helper imports point at luna_batch_output / luna_logging;
 # DESCRIPTION rewritten; input 'description' keys became 'tooltip'; log prefix and messages use the node's own name;
-# install help describes this pack; registered as a V1 node. Behaviour, inputs and memory handling as upstream.
+# install help describes this pack; registered as a V1 node; an optional `fps` input and an `fps` output (input fps x
+# the frames per source interval) appended last. Behaviour, other inputs and memory handling as upstream.
 """Pair-based NVIDIA RTX interpolation; no SDK/GPU work at module import."""
 import contextlib
 import inspect
@@ -22,6 +23,28 @@ from .luna_rtx_upscaler import (
 from .luna_logging import log_luna as _luna_fg_log
 
 NODE_NAME = "Luna-RTXFrameGen"
+# The input frame rate when the `fps` socket is unwired (Luna-Media-Tools SPEC.md § 1, 2026-11-20: "unwired 24").
+DEFAULT_FPS = 24.0
+
+
+def _luna_fg_fps(fps):
+    """The `fps` input -> a finite positive float; None (unwired) -> DEFAULT_FPS."""
+    if fps is None:
+        return DEFAULT_FPS
+    if isinstance(fps, bool):
+        raise ValueError("fps must be a finite number above 0.")
+    try:
+        rate = float(fps)
+    except (TypeError, ValueError):
+        raise ValueError("fps must be a finite number above 0.") from None
+    if not math.isfinite(rate) or rate <= 0:
+        raise ValueError("fps must be a finite number above 0.")
+    return rate
+
+
+def _luna_fg_step(generation_type, multiplier):
+    """Output frames per source interval: M in frame rate multiplier mode, 2 in specific timestep mode."""
+    return multiplier if generation_type == "frame rate multiplier" else 2
 
 
 def _luna_fg_sdk():
@@ -82,16 +105,24 @@ class LunaRTXFrameGen:
         "Luna-RTXFrameGen: adds in-between frames to an image batch with NVIDIA RTX frame generation "
         "(interpolation between each pair of neighbouring frames). RGB only; alpha is discarded.\n"
         "frame rate multiplier: inserts M-1 frames per pair, so N frames become (N-1)*M+1; every source frame and both "
-        "endpoints are kept. Encode at source FPS * M to keep the speed. specific timestep: inserts one frame per pair "
-        "at the given position, 2*N-1 frames; only 0.5 is evenly spaced.\n"
+        "endpoints are kept. specific timestep: inserts one frame per pair at the given position, 2*N-1 frames; only 0.5 "
+        "is evenly spaced.\n"
+        "fps: wire the source frame rate into the fps input (unwired = 24). The fps output is that rate times M "
+        "(frame rate multiplier) or times 2 (specific timestep), also for a single frame; encode at it to keep the "
+        "speed: wire it to Luna-SaveVideo frame_rate or Luna-RelayVSR frame_rate.\n"
         "mode picks the SDK quality tier (LOW, MEDIUM, HIGH); shot-change detection avoids blending across cuts. The whole "
         "output is one IMAGE batch kept in VRAM, then RAM, then (only with use_mmap) a temp file. A single frame passes "
         "through untouched. Needs an NVIDIA RTX GPU and the nvidia-vfx package in ComfyUI's Python.\n"
-        "No FPS, timestamps or audio are passed through."
+        "No timestamps or audio are passed through."
     )
-    OUTPUT_TOOLTIPS = ("The IMAGE batch with the generated frames inserted; set the encoder FPS to source FPS * multiplier.",)
-    RETURN_TYPES = ("IMAGE",)
-    RETURN_NAMES = ("images",)
+    OUTPUT_TOOLTIPS = (
+        "The IMAGE batch with the generated frames inserted; encode it at the fps output. For Luna-SaveVideo images or "
+        "Luna-RelayVSR images.",
+        "The frame rate of the images output: the fps input (unwired 24) times the multiplier in frame rate multiplier "
+        "mode, times 2 in specific timestep mode. For Luna-SaveVideo frame_rate or Luna-RelayVSR frame_rate.",
+    )
+    RETURN_TYPES = ("IMAGE", "FLOAT")
+    RETURN_NAMES = ("images", "fps")
     FUNCTION = "luna_rtx_generate_frames"
     CATEGORY = "Luna-Media-Tools"
 
@@ -102,9 +133,9 @@ class LunaRTXFrameGen:
         except Exception:
             packed = False
         return {"required": {
-            "images": ("IMAGE", {"tooltip": "Ordered IMAGE batch: still images or decoded video frames, not a VIDEO object. RGB only; alpha discarded. No FPS, timestamps or audio are passed through."}),
-            "generation_type": (["frame rate multiplier", "specific timestep"], {"tooltip": "frame rate multiplier: evenly insert M-1 frames per pair, output (N-1)*M+1; encode at source FPS*M. specific timestep: insert one frame per pair, output 2*N-1; only 0.5 is uniformly spaced (encode at source FPS*2). Both preserve endpoints; container duration can differ by a final frame interval."}),
-            "multiplier": ("INT", {"default": 2, "min": 2, "max": 16, "tooltip": "Active only for frame rate multiplier: M subdivisions per source interval, M-1 generated frames per pair. Output (N-1)*M+1; set encoder FPS to source FPS*M. Ignored for specific timestep."}),
+            "images": ("IMAGE", {"tooltip": "Ordered IMAGE batch: still images or decoded video frames, not a VIDEO object. RGB only; alpha discarded. Its frame rate comes on the fps input; no timestamps or audio are passed through."}),
+            "generation_type": (["frame rate multiplier", "specific timestep"], {"tooltip": "frame rate multiplier: evenly insert M-1 frames per pair, output (N-1)*M+1; fps output = fps input*M. specific timestep: insert one frame per pair, output 2*N-1; only 0.5 is uniformly spaced; fps output = fps input*2. Encode at the fps output. Both preserve endpoints; container duration can differ by a final frame interval."}),
+            "multiplier": ("INT", {"default": 2, "min": 2, "max": 16, "tooltip": "Active only for frame rate multiplier: M subdivisions per source interval, M-1 generated frames per pair. Output (N-1)*M+1; the fps output is the fps input times M. Ignored for specific timestep."}),
             "timestep": ("FLOAT", {"default": 0.5, "min": 0.01, "max": 0.99, "step": 0.01, "tooltip": "Active only for specific timestep: fractional position between previous (0) and next (1) source frame. 0.5 is the midpoint; other values produce unequal temporal spacing that a constant-FPS IMAGE encoder cannot reproduce exactly. Ignored for multiplier mode."}),
             "mode": (["LOW", "MEDIUM", "HIGH"], {"default": "HIGH", "tooltip": "SDK interpolation quality preset: LOW favors speed, MEDIUM is the middle tier, HIGH favors quality. These are frame-generation modes, not VSR levels; cost and visual quality depend on SDK, GPU and content, with no fixed speed or quality guarantee."}),
             "automatic_shot_change_detection": ("BOOLEAN", {"default": True, "tooltip": "On: ask the SDK to detect cuts automatically between source frames. Off: disable automatic detection; the separate shot_change flag still applies. Cut handling is SDK-defined, not a per-frame cut list."}),
@@ -115,12 +146,13 @@ class LunaRTXFrameGen:
                                {"default": "8-bit RGB", "tooltip": "8-bit RGB: default SDK encoding, retains source floating output dtype. 10-bit RGB (RGB10A2): packed 10-bit SDR SDK processing, float32 output; not HDR or smaller IMAGE storage. Original frames are copied directly."}),
             "auto_unload_models": ("BOOLEAN", {"default": True, "tooltip": "On: reclaim targeted GPU memory and, under RAM output pressure, native execution caches and model pins; re-check before allocation. Off: no reclamation. Never resets the running executor or globally offloads GPU models into RAM. Native cache eviction requires ComfyUI RAM-pressure cache support; full batches still need storage."}),
             "use_mmap": ("BOOLEAN", {"default": False, "tooltip": "Off: never allocate disk output. On: allow a temporary mmap as the last output tier if budgeted VRAM/RAM cannot fit the complete IMAGE batch. Requires disk space for the full output; not streaming input/output."}),
+            "fps": ("FLOAT", {"forceInput": True, "default": DEFAULT_FPS, "tooltip": "Frame rate of the images input, a socket only: wire Luna-LoadVideo fps or the rate the frames were made at. Unwired = 24. Sets the fps output (this rate times the multiplier, or times 2 in specific timestep); it does not change the frames."}),
         }}
 
     def luna_rtx_generate_frames(self, images, generation_type="frame rate multiplier", multiplier=2,
                                   timestep=0.5, mode="HIGH", automatic_shot_change_detection=True,
                                   shot_change=False, device_id=0, image_encoding="8-bit RGB",
-                                  auto_unload_models=True, use_mmap=False):
+                                  auto_unload_models=True, use_mmap=False, fps=None):
         if not isinstance(images, torch.Tensor) or images.ndim != 4 or images.shape[-1] < 3:
             raise ValueError(f"{NODE_NAME} requires a BHWC RGB/RGBA IMAGE tensor.")
         if not images.is_floating_point() or any(dim < 1 for dim in images.shape):
@@ -138,9 +170,12 @@ class LunaRTXFrameGen:
         if isinstance(device_id, bool) or not isinstance(device_id, int) or device_id < 0:
             raise ValueError("device_id must be a nonnegative CUDA index.")
         packed = image_encoding != "8-bit RGB"
+        step = _luna_fg_step(generation_type, multiplier)
+        # The SPEC names no exception: a single frame passed through also reports input fps x step.
+        out_fps = _luna_fg_fps(fps) * step
         # Single-frame passthrough needs neither SDK nor GPU. RGB-only policy.
         if images.shape[0] == 1:
-            return (images[..., :3].float() if packed else images[..., :3],)
+            return (images[..., :3].float() if packed else images[..., :3], out_fps)
         effect_class, modes, encodings, supports_packed = _luna_fg_sdk()
         if packed and not supports_packed:
             raise RuntimeError(f"The installed SDK does not support RGB10A2 in {NODE_NAME}.")
@@ -148,7 +183,6 @@ class LunaRTXFrameGen:
             raise RuntimeError(f"{NODE_NAME} requires an available NVIDIA CUDA device.")
         device = torch.device(f"cuda:{device_id}")
         count, height, width, _ = images.shape
-        step = multiplier if generation_type == "frame rate multiplier" else 2
         shape = ((count - 1) * step + 1, height, width, 3)
         if generation_type == "specific timestep" and timestep != 0.5:
             _luna_fg_log(NODE_NAME, "Warning: specific timestep produces nonuniform temporal spacing; IMAGE has no timestamps.")
@@ -202,7 +236,7 @@ class LunaRTXFrameGen:
                     if effect is not None:
                         _luna_fg_close_effect(effect)
                         effect = None
-            return (out,)
+            return (out, out_fps)
         except BaseException:
             # Tracebacks must not retain the full failed mmap batch or pair views.
             out = previous = current = row = result = None

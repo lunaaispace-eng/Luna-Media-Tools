@@ -270,13 +270,28 @@ def test_e_zero_active_has_a_naming_of_zero_cards(tmp_path):
     assert set(refs) == set(il.empty_refs("x")), "no key added or lost beside naming"
 
 
+# The Luna packs' bundle (Luna-MinimaxH3 SPEC.md § 2), the Asset Loader's keys, plus naming and the keyframe list
+# (Luna-Media-Tools SPEC.md § 1, 2026-11-20).
+REFS_KEYS = {"images", "roles", "videos", "video_audios", "audios", "song", "vocals", "keyframes", "brief", "items",
+             "width", "height", "naming"}
+
+
 def test_refs_keys_only_gain_naming(tmp_path):
     refs = Node().load(_three(tmp_path), 2, "", _roles(*A_ROLES, target="minimax_image"))[3]
-    assert set(refs) == {"images", "videos", "video_audios", "audios", "width", "height", "brief", "song", "roles",
-                         "items", "naming"}
+    assert set(refs) == REFS_KEYS
+    assert refs["vocals"] is None and refs["keyframes"] == []
     # The edit base (card 3) is not active: card order, and its @ name is not in the map, so it warns.
     assert refs["naming"]["map"] == {"@image1": ("image", 1), "@image2": ("image", 2)}
     assert naming.replace("@image3 in the style of @image2", refs["naming"])[1]
+
+
+def test_empty_refs_have_the_bundle_keys(tmp_path):
+    for refs in (il.empty_refs("x"), il.empty_refs("x", naming.make("qwen")),
+                 Node().load(_pic(tmp_path, "a.png", 8, 8), 0, "", "")[3]):
+        assert set(refs) == REFS_KEYS
+        assert refs["vocals"] is None and refs["keyframes"] == []
+    # A fresh list each call: one run's keyframes never leak into another's.
+    assert il.empty_refs("x")["keyframes"] is not il.empty_refs("x")["keyframes"]
 
 
 def test_parse_target():

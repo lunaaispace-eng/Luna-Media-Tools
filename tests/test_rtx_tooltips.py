@@ -163,7 +163,8 @@ EXPECTED = {('upscaler', False): [('required',
                        ('optional',
                         [('image_encoding', (['8-bit RGB'], {'default': '8-bit RGB'})),
                          ('auto_unload_models', ('BOOLEAN', {'default': True})),
-                         ('use_mmap', ('BOOLEAN', {'default': False}))])],
+                         ('use_mmap', ('BOOLEAN', {'default': False})),
+                         ('fps', ('FLOAT', {'forceInput': True, 'default': 24.0}))])],
  ('framegen', True): [('required',
                        [('images', ('IMAGE', {})),
                         ('generation_type', (['frame rate multiplier', 'specific timestep'], {})),
@@ -176,7 +177,8 @@ EXPECTED = {('upscaler', False): [('required',
                       ('optional',
                        [('image_encoding', (['8-bit RGB', '10-bit RGB (RGB10A2)'], {'default': '8-bit RGB'})),
                         ('auto_unload_models', ('BOOLEAN', {'default': True})),
-                        ('use_mmap', ('BOOLEAN', {'default': False}))])]}
+                        ('use_mmap', ('BOOLEAN', {'default': False})),
+                        ('fps', ('FLOAT', {'forceInput': True, 'default': 24.0}))])]}
 
 @pytest.mark.parametrize("modern", [False, True])
 @pytest.mark.parametrize("name", ["upscaler", "framegen"])
@@ -204,8 +206,10 @@ def test_tooltips_cover_every_input_and_preserve_abi(monkeypatch, modern, name):
         actual.append((section, rows))
     assert len(tips) == len(set(tips)), "Each control needs distinct meaningful help"
     assert actual == EXPECTED[name, modern]
-    assert cls.RETURN_TYPES == ("IMAGE",)
-    assert cls.RETURN_NAMES == ("images",)
+    # Luna-RTXFrameGen appends an fps output after images (SPEC.md § 1, 2026-11-20); the images slot stays first.
+    assert cls.RETURN_TYPES == (("IMAGE",) if name == "upscaler" else ("IMAGE", "FLOAT"))
+    assert cls.RETURN_NAMES == (("images",) if name == "upscaler" else ("images", "fps"))
+    assert len(cls.OUTPUT_TOOLTIPS) == len(cls.RETURN_NAMES)
     assert cls.FUNCTION == ("execute" if name == "upscaler" else "luna_rtx_generate_frames")
     module = rtx if name == "upscaler" else fg
     assert module.NODE_CLASS_MAPPINGS["Luna-RTXUpscaler" if name == "upscaler" else "Luna-RTXFrameGen"] is cls

@@ -53,12 +53,14 @@ class GridTests(unittest.TestCase):
     def test_free_keeps_the_count(self):
         self.assertEqual(grid_frames(120, "free"), 120)
 
-    def test_h3_snaps_to_nearest_17k_plus_5(self):
+    def test_h3_rounds_up_onto_17k_plus_5(self):
         self.assertEqual(grid_frames(120, "h3"), 124)
-        self.assertEqual(grid_frames(40, "h3"), 39)
+        self.assertEqual(grid_frames(40, "h3"), 56)
+        self.assertEqual(grid_frames(384, "h3"), 396)   # no 362 cut
 
-    def test_ltx_snaps_to_nearest_8k_plus_1(self):
+    def test_ltx_rounds_up_onto_8k_plus_1(self):
         self.assertEqual(grid_frames(120, "ltx"), 121)
+        self.assertEqual(grid_frames(100, "ltx"), 105)
         self.assertEqual(grid_frames(1, "ltx"), 1)
 
 
