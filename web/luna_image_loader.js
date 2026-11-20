@@ -1,10 +1,13 @@
 // Luna-ImageLoader — the pictures for image work, on the Asset Loader's card UI (luna_cards.mjs).
 //
-// Three differences from Luna-H3-AssetLoader, nothing else:
+// Four differences from Luna-H3-AssetLoader, nothing else:
 //   1. the role row is Edit base · Reference · Style · Composition (stored in media_state pictures[i].role:
 //      edit, ref, style, composition); at most one edit base;
-//   2. the cards are "Image N";
-//   3. the − N + stepper sets how many pictures are ACTIVE (0-9): cards 1…N are sent and show image_1…image_N,
+//   2. card N is @imageN; each active card shows the tag its ⚙ Target model gets for it ("@image3 · <Picture 1>");
+//   3. ⚙ Target (media_state settings.target: minimax_image | qwen | general, missing = general) picks the shared
+//      naming row of luna_naming.py: MiniMax Image and Qwen send the edit base first, General card order
+//      (cardNames below; image_loader.py sends in the same order, and tests/test_image_loader.py compares the two);
+//   4. the − N + stepper sets how many pictures are ACTIVE (0-9): cards 1…N are sent as image_1…image_N,
 //      a card above N stays in the node, greyed and off.
 //
 // ComfyUI has no dynamic outputs: Python declares all nine image_N and this removes the trailing ones. The four
@@ -25,9 +28,45 @@ const FIXED = 4;                                  // width, height, asset_brief,
 const ROLES = [["edit", "Edit base"], ["ref", "Reference"], ["style", "Style"], ["composition", "Composition"]];
 const BADGE = { edit: "edit", style: "style", composition: "layout", ref: "" };
 
+/* ------------------------------------------------------------------ naming: the ⚙ Target and the @ names */
+
+// The ⚙ Target -> its row of luna_naming.py ROWS (pictures only): tag pattern, first number, edit base first.
+export const TARGETS = [["minimax_image", "MiniMax Image"], ["qwen", "Qwen"], ["general", "General"]];
+const ROWS = {
+    minimax_image: { image: "<Picture {n}>", first: 1, editFirst: true },
+    qwen: { image: "<image{n}>", first: 1, editFirst: true },
+    general: { image: "Image {n}", first: 1, editFirst: false },
+};
+
+// Own keys only: a saved "constructor" or "__proto__" is an unknown Target too, so it falls back to General as parse_target does.
+export const targetName = (t) => (typeof t === "string" && Object.prototype.hasOwnProperty.call(ROWS, t) ? t : "general");
+
+// The order-and-tag rule the cards show, the same as image_loader.py + luna_naming.make:
+//   target: settings.target; roles: one stored role per card; active: how many cards are sent (cards 0…active-1).
+// Only the first card marked edit is the edit base (a later one is sent as a reference, as parse_roles does).
+// Returns { target, order: [card index, in sent order], cards: [{ name, place, tag, label }] } with place 1-based
+// (null for a card that is not active) and label "@image3 · <Picture 1>" (or "@image4 · off").
+export function cardNames(target, roles, active) {
+    target = targetName(target);
+    const row = ROWS[target];
+    const n = Math.max(0, Math.min(roles.length, Number.isFinite(Number(active)) ? Number(active) : 0));
+    let edit = -1;
+    for (let i = 0; i < n; i++) if (roles[i] === "edit") { edit = i; break; }
+    const cardOrder = Array.from({ length: n }, (_, i) => i);
+    const order = edit >= 0 && row.editFirst ? [edit, ...cardOrder.filter((i) => i !== edit)] : cardOrder;
+    const place = new Map(order.map((c, p) => [c, p + 1]));
+    const cards = roles.map((_, i) => {
+        const name = `@image${i + 1}`;
+        const p = place.get(i) ?? null;
+        const tag = p === null ? null : row.image.replace("{n}", String(p - 1 + row.first));
+        return { name, place: p, tag, label: `${name} · ${tag ?? "off"}` };
+    });
+    return { target, order, cards };
+}
+
 /* ------------------------------------------------------------------ media_state: roles and node settings */
 
-function readMedia(node) {
+export function readMedia(node) {
     try {
         const m = JSON.parse(String(widget(node, MEDIA_WIDGET)?.value || "") || "{}");
         return {
@@ -37,7 +76,7 @@ function readMedia(node) {
     } catch { return { pictures: [], settings: {} }; }
 }
 
-function writeMedia(node, m) {
+export function writeMedia(node, m) {
     const w = widget(node, MEDIA_WIDGET);
     if (!w) return;
     const out = {};
@@ -48,17 +87,25 @@ function writeMedia(node, m) {
     node.graph?.setDirtyCanvas(true, true);
 }
 
-const roleOf = (node, i) => {
+export const roleOf = (node, i) => {
     const r = readMedia(node).pictures[i]?.role;
     return ROLES.some(([v]) => v === r) ? r : "ref";
 };
 
-function setRole(node, i, role) {
+export function setRole(node, i, role) {
     const m = readMedia(node);
     while (m.pictures.length <= i) m.pictures.push({});
     // One edit base: choosing it here turns any other edit base into a reference.
     if (role === "edit") m.pictures.forEach((p, k) => { if (k !== i && p?.role === "edit") p.role = "ref"; });
     m.pictures[i] = { ...m.pictures[i], role };
+    writeMedia(node, m);
+}
+
+export const targetOf = (node) => targetName(readMedia(node).settings?.target);
+
+export function setTarget(node, target) {
+    const m = readMedia(node);
+    m.settings = { ...m.settings, target: targetName(target) };
     writeMedia(node, m);
 }
 
@@ -127,13 +174,21 @@ function buildUI(node) {
     picker.multiple = true;
     picker.style.display = "none";
 
+    // The @ names and tags of every card, from the node's current Target, roles and active count.
+    const names = () => {
+        const n = readPaths(node).length;
+        return cardNames(targetOf(node), Array.from({ length: n }, (_, i) => roleOf(node, i)), countOf(node)).cards;
+    };
+    const named = (i) => names()[i] || { name: `@image${i + 1}`, tag: null, label: `@image${i + 1}` };
     const section = buildPictureSection(node, {
         max: MAX,
         roles: ROLES,
         roleOf: (i) => roleOf(node, i),
         setRole: (i, v) => setRole(node, i, v),
-        roleBadge: (i) => BADGE[roleOf(node, i)] || "",
-        label: (i) => `Image ${i + 1}`,
+        // The tag the Target model gets for this card, then its role: "<Picture 1> · edit".
+        roleBadge: (i) => [named(i).tag, BADGE[roleOf(node, i)]].filter(Boolean).join(" · "),
+        pic: (i) => named(i).name,
+        label: (i) => named(i).label,
         active: (i) => i < countOf(node),
         previewH: () => previewH(node),
         // A picture's role travels with it; so does the active count when an active card goes.
@@ -199,6 +254,10 @@ function buildUI(node) {
         node.setDirtyCanvas(true, true);
     };
     const gearBtn = mkBtn("⚙", "", () => openSettings(app, node, `${NODE} settings`, (body, chips, head) => {
+        head("@", "Naming");
+        chips("Target", TARGETS, targetOf(node), (v) => { setTarget(node, v); render(); },
+            "The model the pictures go to. MiniMax Image (<Picture n>) and Qwen (<imageN>) edit image_1: the edit base " +
+            "is sent first. General (Image N) sends card order. The cards show each @ name's tag.");
         head("▦", "Node");
         chips("Preview height", [["S", "S"], ["M", "M"], ["L", "L"]], readMedia(node).settings?.node?.preview || "M", (v) => {
             const m = readMedia(node);
@@ -207,7 +266,7 @@ function buildUI(node) {
             render();
         });
     }, () => { const m = readMedia(node); m.settings = {}; writeMedia(node, m); render(); }));
-    gearBtn.title = "Settings: preview height";
+    gearBtn.title = "Settings: Target (the model the pictures go to: order and @ name tags), preview height";
     const fieldsBtn = mkBtn("Fields", "", () => {
         fieldsShown = !fieldsShown;
         setFieldsVisible(fieldsShown);

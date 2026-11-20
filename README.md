@@ -56,8 +56,10 @@ python_embeded\python.exe -m pip install nvidia-vfx
 - **Luna-RTXFrameGen**: Adds in-between frames with NVIDIA RTX frame generation.
 - **Luna-MetaBatch**: Runs the graph once per batch, so one video is written across several queued runs.
 - **Luna-RelayVSR**: RelayVSR video upscale straight to a file, one window at a time, so 4K fits in RAM.
-- **Luna-ImageLoader**: Up to 9 pictures as Image 1…9, each with a role (edit base, reference, style, composition) and its
-  own size; out as `width`, `height`, `asset_brief`, `refs` (for the Luna-LLM-Tools writers) and `image_1…image_9`.
+- **Luna-ImageLoader**: Up to 9 picture cards, @image1…@image9 in the prompt, each with a role (edit base, reference, style,
+  composition) and its own size; ⚙ Target (MiniMax Image, Qwen, General) sends the edit base first as `image_1` for the models
+  that edit `image_1`, and each card shows the tag its @ name becomes; out as `width`, `height`, `asset_brief`, `refs` (for the
+  Luna-LLM-Tools writers, with the @ names map) and `image_1…image_9`.
 - **Luna-ImageResolution**: The size to generate and an empty latent in the chosen model's own shape (MiniMax H3 Image,
   Qwen-Image 2.1, MOSS-Image, Fibo 2.0, Krea 2, Z-Image Turbo, Flux.1, Flux.2, SDXL); custom sizes from
   `ComfyUI/user/luna/resolutions.json`.

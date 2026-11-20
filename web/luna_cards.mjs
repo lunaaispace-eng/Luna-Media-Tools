@@ -434,6 +434,7 @@ export function drawCtl(node, ctx, { label, min, max }) {
 //   roles: [[value, text], ...]             the role row; roleOf(i) / setRole(i, value) read and write it
 //   roleBadge(i): text or ""                a short role tag on the card ("" = none)
 //   label(i): "Image 1"                     the card's name everywhere on the node
+//   pic(i): text                            the number chip on the card (default i + 1)
 //   active(i): bool                         false greys the card out (it is not sent)
 //   previewH(): px                          the preview height
 //   onRemove(i), onMove(from, to)           move the node's own per-card data (roles) with the picture
@@ -495,7 +496,7 @@ export function buildPictureSection(node, opts) {
             img.src = viewURL(name);
             const pic = document.createElement("div");
             pic.className = "luna-al-pic";
-            pic.textContent = i + 1;
+            pic.textContent = opts.pic ? opts.pic(i) : i + 1;
             pic.title = opts.label(i);
             const badge = opts.roleBadge ? opts.roleBadge(i) : "";
             const cap = document.createElement("div");
