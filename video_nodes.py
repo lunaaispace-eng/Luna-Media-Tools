@@ -248,10 +248,18 @@ def _available_encoders(ffmpeg):
     return {line.split()[1] for line in result.stdout.splitlines() if line.startswith(" V")}
 
 
+# hevc_nvenc and av1_nvenc cap -cq at a level-derived default maxrate (~24 and ~130 Mbit/s at 4K), so quality stopped
+# governing; h264_nvenc is not capped and keeps its arguments. Measured 2026-11-26, ffmpeg 9.0.1, 3840x2160.
+_NVENC_CEILING = {
+    "hevc_nvenc": ["-tier", "high", "-maxrate", "400M", "-bufsize", "800M"],
+    "av1_nvenc": ["-maxrate", "400M", "-bufsize", "800M"],
+}
+
+
 def _encoder_arguments(codec, encoder, bit_depth, cq, crf):
     pixel_format = "yuv420p10le" if bit_depth == 10 else "yuv420p"
     if encoder.endswith("_nvenc"):
-        return ["-c:v", encoder, "-preset", "p5", "-cq", str(cq), "-pix_fmt", pixel_format]
+        return ["-c:v", encoder, "-preset", "p5", "-cq", str(cq), *_NVENC_CEILING.get(encoder, []), "-pix_fmt", pixel_format]
     if encoder.endswith("_qsv"):
         return ["-c:v", encoder, "-global_quality", str(cq), "-pix_fmt", pixel_format]
     if encoder.endswith("_amf"):
