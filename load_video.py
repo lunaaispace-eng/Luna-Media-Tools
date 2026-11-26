@@ -35,7 +35,7 @@ import urllib.request
 import folder_paths
 
 from .media_io import (clean_path, clip_soundtrack, strip_annotation, decode_clip, download_name, folder_videos, is_url,
-                       plan_load, probe_media)
+                       grid_count, plan_load, probe_media)
 
 NODE = "Luna-LoadVideo"
 GRIDS = {"free": "free", "H3 (24 fps, 17k+5)": "h3", "LTX (8k+1)": "ltx"}
@@ -319,12 +319,27 @@ class LunaLoadVideo:
         lines = []
         for f, plan in zip(files, plans):
             out, info = decode_clip(f, start, plan["frames"], plan["fps"], plan["size"], plan["fit"],
-                                    every_nth, precision, grid, who=NODE)
+                                    every_nth, precision, "free", who=NODE)
+            # The plan has already snapped to the grid. If the decoder encounters an early EOF,
+            # measure the frames it really read before applying the same downward snap.
+            if info["short"] and grid != "free":
+                available = round(info["seconds"] * plan["fps"])
+                keep = grid_count(available, grid, available)
+                if keep == 0:
+                    raise RuntimeError(f"[{NODE}] {os.path.basename(f)} ended before the first {grid} frame grid.")
+                dropped = available - keep
+                out = out[:(keep + every_nth - 1) // every_nth]
+                info["seconds"] = keep / plan["fps"]
+            else:
+                requested = min(frames, plan["available"]) if frames > 0 else plan["available"]
+                dropped = max(0, requested - plan["frames"]) if grid != "free" else 0
             sound = clip_soundtrack(f, info["start"], info["seconds"]) if audio == "keep" else None
             count = int(out.shape[0])
             line = (f"{os.path.basename(f)}: {count} frames @ {info['fps']:g} fps, "
                     f"{info['width']}x{info['height']}, {info['seconds']:.2f} s"
                     f"{' + sound' if sound is not None else ''}")
+            if dropped:
+                line += f" ({grid} frame grid dropped {dropped} frames before every_nth sampling)"
             if info["short"]:
                 line += f" (file ended early: asked {info['asked']})"
             print(f"[{NODE}] {line}")

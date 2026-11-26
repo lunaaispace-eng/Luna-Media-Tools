@@ -1,0 +1,6 @@
+# These cross-pack copies are checked byte for byte.
+luna_naming.py text eol=lf
+luna_units.py text eol=lf
+media_io.py text eol=lf
+tests/test_luna_naming.py text eol=lf
+tests/test_luna_units.py text eol=lf

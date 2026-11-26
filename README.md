@@ -46,7 +46,7 @@ python_embeded\python.exe -m pip install nvidia-vfx
 
 - **Luna-SaveImage**: Saves images, with optional workflow metadata.
 - **Luna-SaveVideo**: Encodes an image batch to video on the GPU (NVENC).
-- **Luna-LoadVideo**: Loads a video as frames with its sound; shows the cost first.
+- **Luna-LoadVideo**: Loads a video as frames with its sound. The preview estimates the cost. The load report gives any frames trimmed for the H3 or LTX grid before every_nth sampling.
 - **Luna-ImagePrecision**: Casts an image batch to fp16 or fp32 to save RAM.
 - **Luna-Degrid**: Removes the 2px VAE pixel grid; wire after VAE Decode.
 - **Luna-Ideogram**: Draw regions on a canvas; builds the Ideogram 4 JSON prompt.
