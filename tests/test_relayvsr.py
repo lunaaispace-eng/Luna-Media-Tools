@@ -210,8 +210,8 @@ class NodeTests(unittest.TestCase):
         self.assertEqual(tuple(self.frames_in(path).shape), (16, 64, 96, 3))
         del video
 
-    def test_sdr_save_is_unchanged(self):
-        self.assertEqual(video_nodes._color_arguments("SDR"), [])
+    def test_sdr_save_is_bt709(self):
+        self.assertIn("-colorspace", video_nodes._color_arguments("SDR"))
         self.assertEqual(video_nodes._selected_bit_depth("H.264", "8-bit", clip(2), "SDR"), 8)
         self.assertEqual(video_nodes._selected_bit_depth("H.264", "8-bit", clip(2), "HDR HLG (BT.2020)"), 10)
         self.assertEqual(video_nodes._hdr_codec("Auto", "Auto"), "H.265 (HEVC)")

@@ -187,7 +187,8 @@ def _codec_candidates(codec):
 
 # HDR save (2026-11-11). The frames arrive already HDR-coded, e.g. from RTX Video HDR ("HDR" = BT.2020
 # with HLG, "HDR PQ" = BT.2020 with PQ). The file gets 10-bit, the BT.2020 conversion matrix and the HDR tags, so an HDR
-# screen shows it as HDR. SDR writes exactly what it wrote before (no tags).
+# screen shows it as HDR. SDR (2026-11-26) gets the BT.709 matrix and the BT.709 tags: untagged it was written with
+# FFmpeg's default BT.601 matrix, and DaVinci Resolve read it as Rec.709, shifted warm (red +1.7 %, skin hue +3-4 deg).
 COLOR_OPTIONS = ["SDR", "HDR HLG (BT.2020)", "HDR PQ (BT.2020)"]
 _HDR_TRANSFER = {"HDR HLG (BT.2020)": "arib-std-b67", "HDR PQ (BT.2020)": "smpte2084"}
 COLOR_TOOLTIP = (
@@ -200,13 +201,16 @@ def is_hdr(color):
     return color in _HDR_TRANSFER
 
 
-def _color_arguments(color):
-    """FFmpeg output options for `color`: the RGB to YUV matrix and the tags. Empty for SDR."""
+def _color_arguments(color, bit_depth=8):
+    """FFmpeg output options for `color`: the RGB to YUV matrix and the tags. SDR is BT.709, HDR is BT.2020."""
     transfer = _HDR_TRANSFER.get(color)
-    if transfer is None:
-        return []
     # The frames carry the tags (setparams) as well as the output options: FFmpeg takes the frames' own colour
     # properties over -color_* when the filter chain sets any (MEASURED 2026-11-11: matrix only, primaries/trc lost).
+    if transfer is None:
+        pixel_format = "yuv420p10le" if bit_depth == 10 else "yuv420p"
+        return ["-vf", f"scale=out_color_matrix=bt709:out_range=tv,format={pixel_format},"
+                       "setparams=range=tv:colorspace=bt709:color_primaries=bt709:color_trc=bt709",
+                "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709", "-color_range", "tv"]
     return ["-vf", "scale=out_color_matrix=bt2020:out_range=tv,format=yuv420p10le,"
                    f"setparams=range=tv:colorspace=bt2020nc:color_primaries=bt2020:color_trc={transfer}",
             "-colorspace", "bt2020nc", "-color_primaries", "bt2020", "-color_trc", transfer, "-color_range", "tv"]
@@ -540,7 +544,7 @@ def _encode_with_available_encoder(
             if audio_path:
                 command.extend(["-map", f"{video_input_index + 1}:a:0", "-c:a", selected_audio_encoder, "-b:a", audio_bitrate])
             command.extend(_encoder_arguments(codec, encoder, bit_depth, cq, crf))
-            command.extend(_color_arguments(color))
+            command.extend(_color_arguments(color, bit_depth))
             if crop_to_audio and audio_duration is not None:
                 command.extend(["-t", f"{audio_duration:.9f}"])
             if container == "MP4":
@@ -573,6 +577,7 @@ def _encode_animated_image(ffmpeg, container, bit_depth, width, height, frame_ra
             command.extend(["-c:v", encoder, "-loop", "0", "-q:v", str(quality)])
         else:
             command.extend(_encoder_arguments("AV1", encoder, bit_depth, quality, quality))
+            command.extend(_color_arguments("SDR", bit_depth))
             command.extend(["-still-picture", "0", "-f", "avif"])
         result = _run_ffmpeg(command + [output_path], frame_chunks, progress_callback)
         if result.returncode == 0:
